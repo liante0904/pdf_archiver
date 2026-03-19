@@ -26,8 +26,7 @@ RCLONE_REMOTE = "onedrive:/archive/pdf"
 LOCK_FILE = "/tmp/pdf_archiver_async.lock"
 
 # --- 엄격한 실행 제어 ---
-# 현재 3건으로 엄격히 제한. 서버 안정화 후 이 값만 수정하면 됩니다.
-MAX_PROCESS_COUNT = 3  
+MAX_PROCESS_COUNT = 50  # 실운용을 위해 50건으로 확대
 MAX_RETRY_PER_FILE = 3  # 파일당 재시도 횟수
 MAX_CONCURRENCY = 1    # 안정성을 위해 동시 처리는 1건(Sequential)
 
@@ -69,20 +68,30 @@ class DownloadManager:
             conn.commit()
 
     def get_targets(self):
-        """가장 신뢰도 높은 TELEGRAM_URL 위주로 3건 추출 (상태 3은 최우선 처리)"""
+        """가장 신뢰도 높은 TELEGRAM_URL 위주로 50건 추출 (회사별 교차 처리 적용)"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            # 1. sync_status=3(수동보정)을 최우선으로, 2. TELEGRAM_URL 존재여부, 3. 최신순
+            # 1. sync_status=3(수동보정)을 최우선으로
+            # 2. 회사별(FIRM_NM)로 순위를 매겨(ROW_NUMBER) 교차 추출 (Interleaving)
+            # 3. 최신 데이터 우선
             cursor.execute("""
                 SELECT id, report_id, TELEGRAM_URL, DOWNLOAD_URL, ATTACH_URL, sync_status, retry_count, FIRM_NM, ARTICLE_TITLE, REG_DT
-                FROM data_main_daily_send 
-                WHERE sync_status IN (0, 1, 3)
-                AND report_id IS NOT NULL
-                AND (TELEGRAM_URL != '' OR DOWNLOAD_URL != '' OR ATTACH_URL != '')
-                AND retry_count < 5
+                FROM (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY FIRM_NM 
+                               ORDER BY (CASE WHEN sync_status = 3 THEN 0 ELSE 1 END), REG_DT DESC
+                           ) as firm_rank
+                    FROM data_main_daily_send 
+                    WHERE sync_status IN (0, 1, 3)
+                    AND report_id IS NOT NULL
+                    AND (TELEGRAM_URL != '' OR DOWNLOAD_URL != '' OR ATTACH_URL != '')
+                    AND retry_count < 5
+                )
                 ORDER BY 
                     (CASE WHEN sync_status = 3 THEN 0 ELSE 1 END), 
-                    (CASE WHEN TELEGRAM_URL != '' THEN 0 ELSE 1 END), 
+                    firm_rank,
+                    (CASE WHEN TELEGRAM_URL != '' THEN 0 ELSE 1 END),
                     REG_DT DESC
                 LIMIT ?
             """, (MAX_PROCESS_COUNT,))

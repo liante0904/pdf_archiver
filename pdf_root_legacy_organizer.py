@@ -88,9 +88,9 @@ class PDFRootLegacyOrganizer:
 
             logging.info(f"이동: {filename} -> {new_path}")
 
-            # rclone move 실행 (대상 경로에 새 파일명을 포함하여 이름 변경 처리)
+            # rclone moveto 실행 (파일 이동 및 이름 변경을 동시에 안전하게 처리)
             move_cmd = [
-                RCLONE_BIN, "move", 
+                RCLONE_BIN, "moveto", 
                 f"{RCLONE_REMOTE}/{filename}", 
                 f"{RCLONE_REMOTE}/{new_path}",
                 "--quiet"
