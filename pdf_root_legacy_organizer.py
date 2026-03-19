@@ -16,18 +16,18 @@ from pathlib import Path
 DB_PATH = os.path.expanduser("~/sqlite3/telegram.db")
 RCLONE_BIN = shutil.which("rclone") or os.path.expanduser("~/.local/bin/rclone")
 RCLONE_REMOTE = "onedrive:/archive/pdf"
-LOCK_FILE = "/tmp/onedrive_migrator.lock"
+LOCK_FILE = "/tmp/pdf_root_legacy_organizer.lock"
 
 # 로깅 설정 (별도 로그 파일 사용)
-LOG_FILE = os.path.expanduser("~/log/onedrive_migrator.log")
+LOG_FILE = os.path.expanduser("~/log/pdf_root_legacy_organizer.log")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [MIGRATOR] %(message)s',
+    format='%(asctime)s [ROOT_ORGANIZER] %(message)s',
     handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler(sys.stdout)]
 )
 
-class OneDriveMigrator:
+class PDFRootLegacyOrganizer:
     def __init__(self):
         self.db_path = DB_PATH
 
