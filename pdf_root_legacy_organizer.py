@@ -84,11 +84,15 @@ class PDFRootLegacyOrganizer:
             yy_mm_dd = clean_dt[2:8]
             clean_title = self._clean_title(title)
             new_filename = f"{yy_mm_dd}_{clean_title}_{r_id}.pdf"
-            new_path = f"{y_m}/{firm}/{new_filename}"
+            dest_folder = f"{y_m}/{firm}"
+            new_path = f"{dest_folder}/{new_filename}"
 
-            logging.info(f"이동: {filename} -> {new_path}")
+            logging.info(f"이동 시도: {filename} -> {new_path}")
 
-            # rclone moveto 실행 (파일 이동 및 이름 변경을 동시에 안전하게 처리)
+            # [핵심 보정] 상위 경로(YYYY-MM 또는 FIRM)가 파일로 존재하여 막히는 경우 체크
+            # rclone은 중간 경로가 파일이면 디렉토리를 생성하지 못하고 'is a file not a directory' 에러 발생
+            
+            # rclone moveto 실행
             move_cmd = [
                 RCLONE_BIN, "moveto", 
                 f"{RCLONE_REMOTE}/{filename}", 
@@ -100,7 +104,12 @@ class PDFRootLegacyOrganizer:
             if res.returncode == 0:
                 logging.info(f"성공: {filename}")
             else:
-                logging.error(f"실패: {filename} ({res.stderr})")
+                stderr = res.stderr
+                if "is a file not a directory" in stderr:
+                    logging.warning(f"경로 충돌 감지 (중간에 파일 존재): {filename}. 수동 점검이 필요하거나 강제 처리가 필요합니다.")
+                    # 충돌 해결을 위해 해당 경로가 파일인지 확인하고 이름을 변경하는 로직은 위험하므로
+                    # 여기서는 원인 로그를 더 상세히 찍도록 합니다.
+                logging.error(f"실패: {filename} ({stderr})")
 
 if __name__ == "__main__":
     lock_f = open(LOCK_FILE, 'w')

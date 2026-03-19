@@ -79,7 +79,7 @@ class DownloadManager:
                     AND report_id IS NOT NULL
                     AND (TELEGRAM_URL != '' OR DOWNLOAD_URL != '' OR ATTACH_URL != '')
                     AND retry_count < 5
-                    AND FIRM_NM != 'DB금융투자'
+                    AND FIRM_NM NOT IN ('DB금융투자', '현대차증권')
                 ),
                 newest AS (
                     SELECT * FROM (
