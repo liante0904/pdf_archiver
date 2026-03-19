@@ -68,33 +68,41 @@ class DownloadManager:
             conn.commit()
 
     def get_targets(self):
-        """가장 신뢰도 높은 TELEGRAM_URL 위주로 50건 추출 (회사별 교차 처리 적용)"""
+        """최신 25건 + 과거 25건을 회사별로 교차하여 추출 (상태 3은 무조건 최우선)"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            # 1. sync_status=3(수동보정)을 최우선으로
-            # 2. 회사별(FIRM_NM)로 순위를 매겨(ROW_NUMBER) 교차 추출 (Interleaving)
-            # 3. 최신 데이터 우선
-            cursor.execute("""
-                SELECT id, report_id, TELEGRAM_URL, DOWNLOAD_URL, ATTACH_URL, sync_status, retry_count, FIRM_NM, ARTICLE_TITLE, REG_DT
-                FROM (
-                    SELECT *,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY FIRM_NM 
-                               ORDER BY (CASE WHEN sync_status = 3 THEN 0 ELSE 1 END), REG_DT DESC
-                           ) as firm_rank
-                    FROM data_main_daily_send 
+            # CTE를 사용하여 최신/과거 데이터를 각각 25건씩 독립적으로 추출 후 합침
+            query = """
+                WITH base AS (
+                    SELECT * FROM data_main_daily_send
                     WHERE sync_status IN (0, 1, 3)
                     AND report_id IS NOT NULL
                     AND (TELEGRAM_URL != '' OR DOWNLOAD_URL != '' OR ATTACH_URL != '')
                     AND retry_count < 5
+                    AND FIRM_NM != 'DB금융투자'
+                ),
+                newest AS (
+                    SELECT * FROM (
+                        SELECT *, ROW_NUMBER() OVER (PARTITION BY FIRM_NM ORDER BY REG_DT DESC) as firm_rank
+                        FROM base
+                    ) ORDER BY (CASE WHEN sync_status = 3 THEN 0 ELSE 1 END), firm_rank, REG_DT DESC LIMIT 25
+                ),
+                oldest AS (
+                    SELECT * FROM (
+                        SELECT *, ROW_NUMBER() OVER (PARTITION BY FIRM_NM ORDER BY REG_DT ASC) as firm_rank
+                        FROM base
+                    ) ORDER BY (CASE WHEN sync_status = 3 THEN 0 ELSE 1 END), firm_rank, REG_DT ASC LIMIT 25
                 )
-                ORDER BY 
-                    (CASE WHEN sync_status = 3 THEN 0 ELSE 1 END), 
-                    firm_rank,
-                    (CASE WHEN TELEGRAM_URL != '' THEN 0 ELSE 1 END),
-                    REG_DT DESC
-                LIMIT ?
-            """, (MAX_PROCESS_COUNT,))
+                SELECT id, report_id, TELEGRAM_URL, DOWNLOAD_URL, ATTACH_URL, sync_status, retry_count, FIRM_NM, ARTICLE_TITLE, REG_DT
+                FROM (
+                    SELECT * FROM newest
+                    UNION
+                    SELECT * FROM oldest
+                )
+                ORDER BY (CASE WHEN sync_status = 3 THEN 0 ELSE 1 END), firm_rank, REG_DT DESC
+                LIMIT 50
+            """
+            cursor.execute(query)
             return cursor.fetchall()
 
     def update_db(self, row_id, status, retry):
@@ -143,7 +151,7 @@ class DownloadManager:
         text = re.sub(r'[\\/:*?"<>|!@#$%^&*.ⓒ,]', ' ', text)
         return "_".join(text.split())[:60].strip('_')
 
-    async def download_file(self, session, urls, file_path):
+    async def download_file(self, session, urls, file_path, firm):
         """가용한 모든 URL(TELEGRAM -> DOWNLOAD -> ATTACH)을 순차적으로 시도"""
         tmp_path = file_path.with_suffix('.tmp')
         
@@ -156,6 +164,7 @@ class DownloadManager:
                     timeout = aiohttp.ClientTimeout(total=60 * attempt, connect=10, sock_read=45)
                     async with session.get(url, timeout=timeout) as resp:
                         if resp.status == 403 or resp.status == 404:
+                            logging.warning(f"[{firm}] HTTP {resp.status} for {url}")
                             break # 다음 URL 시도
                         
                         resp.raise_for_status()
@@ -175,11 +184,11 @@ class DownloadManager:
                         os.rename(tmp_path, file_path)
                         return True
                 except Exception as e:
-                    logging.warning(f"Failed {url} (Attempt {attempt}): {e}")
+                    logging.warning(f"[{firm}] Failed Attempt {attempt} | URL: {url} | Error: {e}")
                     if tmp_path.exists(): os.remove(tmp_path)
                     await asyncio.sleep(1)
             
-            logging.info(f"Trying next available URL for {file_path.name}...")
+            logging.info(f"[{firm}] Trying next available URL for {file_path.name}...")
         return False
 
     async def process_row(self, session, row):
@@ -199,11 +208,12 @@ class DownloadManager:
         target_dir = self.local_dir / y_m / firm
         target_dir.mkdir(parents=True, exist_ok=True)
         file_path = target_dir / filename
+        rel_path = f"{y_m}/{firm}/{filename}"
 
-        logging.info(f"Processing ({self.processed_count+1}/{MAX_PROCESS_COUNT}): {filename}")
+        logging.info(f"Processing ({self.processed_count+1}/{MAX_PROCESS_COUNT}): [{firm}] {filename}")
         
         async with self.semaphore:
-            success = await self.download_file(session, urls, file_path)
+            success = await self.download_file(session, urls, file_path, firm)
             
             if success:
                 # 다운로드 성공 시 상태 1로 우선 업데이트
@@ -211,15 +221,17 @@ class DownloadManager:
                 
                 # 업로드 시도
                 upload_success = await self.upload_to_rclone(file_path)
+                
                 if upload_success:
                     self.update_db(row_id, 2, 0) # 완전 완료
                     self.processed_count += 1
-                    logging.info(f"Successfully archived and moved: {filename}")
+                    logging.info(f"Successfully archived: [OneDrive]/archive/pdf/{rel_path}")
                 else:
-                    logging.warning(f"Download OK but Upload Failed for {filename}. Status set to 1.")
+                    logging.warning(f"[{firm}] Download OK but Upload Failed: {rel_path}. Status set to 1.")
             else:
                 self.update_db(row_id, 0, retry + 1)
-                logging.error(f"All URL sources failed for: {filename}")
+                valid_urls = [u for u in urls if u and u.startswith('http')]
+                logging.error(f"[{firm}] ALL SOURCES FAILED: {filename} | Sources tried: {valid_urls}")
 
     async def run(self):
         targets = self.get_targets()
