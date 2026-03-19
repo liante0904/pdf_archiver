@@ -112,7 +112,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        migrator = OneDriveMigrator()
+        migrator = PDFRootLegacyOrganizer()
         migrator.migrate()
     finally:
         lock_f.close()
