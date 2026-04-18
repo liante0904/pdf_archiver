@@ -14,6 +14,7 @@ import fcntl
 import sys
 import re
 import shutil
+import json
 from pathlib import Path
 
 # --- 설정 ---
@@ -67,20 +68,46 @@ class PDFLocalBatchOrganizer:
         return proc.returncode == 0 and stdout.decode().strip() != ""
 
     async def upload_and_remove(self, local_path, remote_rel_path):
-        """rclone move를 사용하여 업로드 후 로컬 삭제 (비동기)"""
+        """rclone copy 후 원격지 파일 크기를 검증하여 성공 시에만 로컬 삭제"""
         remote_dest_dir = f"{RCLONE_REMOTE}/{os.path.dirname(remote_rel_path)}"
-        cmd = [RCLONE_BIN, "move", str(local_path), remote_dest_dir, "--quiet"]
+        filename = os.path.basename(remote_rel_path)
         
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        _, stderr = await proc.communicate()
+        # move 대신 copy 사용 (안전)
+        cmd = [RCLONE_BIN, "copy", str(local_path), remote_dest_dir]
         
-        if proc.returncode == 0:
-            logging.info(f"성공: {remote_rel_path}")
-            return True
-        else:
-            logging.error(f"실패: {remote_rel_path} ({stderr.decode().strip()})")
+        try:
+            # 1. 업로드 실행
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr = await proc.communicate()
+            
+            # 2. 원격지 검증 (lsjson)
+            is_uploaded = False
+            check_cmd = [RCLONE_BIN, "lsjson", f"{RCLONE_REMOTE}/{remote_rel_path}"]
+            check_proc = await asyncio.create_subprocess_exec(
+                *check_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            check_out, _ = await check_proc.communicate()
+            
+            if check_out:
+                try:
+                    file_info = json.loads(check_out.decode())
+                    if file_info and file_info[0].get('Size', 0) > 1024:
+                        is_uploaded = True
+                except:
+                    pass
+
+            if proc.returncode == 0 and is_uploaded:
+                logging.info(f"성공 및 검증 완료: {remote_rel_path}")
+                if local_path.exists():
+                    local_path.unlink() # 검증 완료 후 삭제
+                return True
+            else:
+                logging.error(f"실패 또는 검증 오류: {remote_rel_path} ({stderr.decode().strip()})")
+                return False
+        except Exception as e:
+            logging.error(f"업로드 중 예외 발생: {e}")
             return False
 
     async def process_single_root_file(self, db, file_path):
