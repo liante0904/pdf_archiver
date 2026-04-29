@@ -8,6 +8,7 @@
 
 import asyncio
 import aiohttp
+import hashlib
 import ssl
 import os
 import time
@@ -48,6 +49,7 @@ SOURCE_TABLE = SOURCE_REPORTS_TABLE
 META_TABLE = PDF_ARCHIVE_TABLE
 PDF_STATUS_COL = "pdf_sync_status"
 LEGACY_STATUS_COL = "sync_status"
+PDF_HASH_COL = "pdf_hash"
 
 LOCAL_BUFFER_DIR = os.getenv("LOCAL_BUFFER_DIR", os.path.expanduser("~/downloads/pdf_archive_temp"))
 RCLONE_BIN = (
@@ -117,6 +119,9 @@ async def ensure_pdf_sync_status_schema(conn):
         if not pdf_status_existed:
             await conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {PDF_STATUS_COL} INTEGER DEFAULT 0")
 
+        if not await _table_has_column(conn, table_name, PDF_HASH_COL):
+            await conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {PDF_HASH_COL} BYTEA")
+
         if table_name == META_TABLE:
             if not await _table_has_column(conn, table_name, "created_at"):
                 await conn.execute(f"ALTER TABLE {table_name} ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()")
@@ -177,6 +182,7 @@ class WorkflowRecord(dict):
         "firm_nm",
         "title",
         "reg_dt",
+        "pdf_hash",
     )
 
     def __getitem__(self, key):
@@ -201,6 +207,12 @@ def _normalize_pdf_url_value(value):
 
 def _normalize_pdf_url_sql(column_name):
     return f"NULLIF(BTRIM({column_name}), '')"
+
+
+def _pdf_hash_bytes(data: bytes):
+    if not data:
+        return None
+    return hashlib.sha256(data).digest()
 
 
 def _pdf_signature_offset(data: bytes, max_scan=2048):
@@ -390,6 +402,7 @@ async def download_ds_pdf(source_url, target_path, title, report_id, firm, reg_d
                 target_path.unlink()
             tmp_path.rename(target_path)
             pages = await get_pdf_page_count(target_path)
+            pdf_hash = _pdf_hash_bytes(body)
             return {
                 "report_id": report_id,
                 "firm": firm,
@@ -398,6 +411,7 @@ async def download_ds_pdf(source_url, target_path, title, report_id, firm, reg_d
                 "size": target_path.stat().st_size,
                 "pages": pages,
                 "reg_dt": reg_dt,
+                "pdf_hash": pdf_hash,
             }
         except Exception as e:
             logging.error(
@@ -638,6 +652,7 @@ async def download_dbfi_pdf(key_url, target_path, title, report_id, firm, reg_dt
                 target_path.unlink()
             tmp_path.rename(target_path)
             pages = await get_pdf_page_count(target_path)
+            pdf_hash = _pdf_hash_bytes(body)
             return {
                 "report_id": report_id,
                 "firm": firm,
@@ -646,6 +661,7 @@ async def download_dbfi_pdf(key_url, target_path, title, report_id, firm, reg_dt
                 "size": target_path.stat().st_size,
                 "pages": pages,
                 "reg_dt": reg_dt,
+                "pdf_hash": pdf_hash,
             }
         except Exception as e:
             logging.error("%s DBfi download failed source=%s err=%s", _report_prefix(firm, title, report_id, reg_dt), _truncate(key_url, 220), e)
@@ -776,6 +792,7 @@ class PDFArchiver:
                         "path": target_path,
                         "size": dbfi_result["size"],
                         "pages": dbfi_result["pages"],
+                        "pdf_hash": dbfi_result.get("pdf_hash"),
                     }))
                     return True
 
@@ -808,6 +825,7 @@ class PDFArchiver:
                             "path": target_path,
                             "size": ds_result["size"],
                             "pages": ds_result["pages"],
+                            "pdf_hash": ds_result.get("pdf_hash"),
                         }))
                         return True
                 return False
@@ -881,6 +899,7 @@ class PDFArchiver:
                                 "path": target_path,
                                 "size": target_path.stat().st_size,
                                 "pages": pages,
+                                "pdf_hash": _pdf_hash_bytes(body),
                             }))
                             return True
                     else:
@@ -899,32 +918,22 @@ class PDFArchiver:
 
     async def _update_source_workflow(self, conn, payload, pdf_status, retry_delta=0):
         pdf_url_norm = _normalize_pdf_url_value(payload.get("pdf_url"))
-        if pdf_url_norm:
-            await conn.execute(
-                f'''
-                UPDATE {SOURCE_TABLE}
-                SET {PDF_STATUS_COL} = $2,
-                    retry_count = COALESCE(retry_count, 0) + $3
-                WHERE report_id = $1
-                   OR NULLIF(BTRIM(pdf_url), '') = $4
-                ''',
-                int(payload["report_id"]),
-                pdf_status,
-                retry_delta,
-                pdf_url_norm,
-            )
-        else:
-            await conn.execute(
-                f'''
-                UPDATE {SOURCE_TABLE}
-                SET {PDF_STATUS_COL} = $2,
-                    retry_count = COALESCE(retry_count, 0) + $3
-                WHERE report_id = $1
-                ''',
-                int(payload["report_id"]),
-                pdf_status,
-                retry_delta,
-            )
+        pdf_hash = payload.get("pdf_hash")
+        await conn.execute(
+            f'''
+            UPDATE {SOURCE_TABLE}
+            SET {PDF_STATUS_COL} = $2,
+                retry_count = COALESCE(retry_count, 0) + $3,
+                {PDF_HASH_COL} = COALESCE($4, {PDF_HASH_COL})
+            WHERE report_id = $1
+               OR NULLIF(BTRIM(pdf_url), '') = $5
+            ''',
+            int(payload["report_id"]),
+            pdf_status,
+            retry_delta,
+            pdf_hash,
+            pdf_url_norm,
+        )
 
     async def _upsert_archive_workflow(self, conn, payload, pdf_status, retry_delta=0, file_path=None, file_size=None, page_count=None, archive_status=None, download_status_yn=None):
         file_name = Path(file_path).name if file_path else None
@@ -936,6 +945,7 @@ class PDFArchiver:
                 title,
                 reg_dt,
                 pdf_url,
+                {PDF_HASH_COL},
                 download_url,
                 telegram_url,
                 key,
@@ -950,13 +960,14 @@ class PDFArchiver:
                 updated_at,
                 retry_count
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16, NOW()), NOW(), $17
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17, NOW()), NOW(), $18
             )
             ON CONFLICT (report_id) DO UPDATE SET
                 firm_nm = EXCLUDED.firm_nm,
                 title = EXCLUDED.title,
                 reg_dt = EXCLUDED.reg_dt,
                 pdf_url = EXCLUDED.pdf_url,
+                {PDF_HASH_COL} = COALESCE(EXCLUDED.{PDF_HASH_COL}, {META_TABLE}.{PDF_HASH_COL}),
                 download_url = EXCLUDED.download_url,
                 telegram_url = EXCLUDED.telegram_url,
                 key = EXCLUDED.key,
@@ -968,13 +979,14 @@ class PDFArchiver:
                 page_count = COALESCE(EXCLUDED.page_count, {META_TABLE}.page_count),
                 {PDF_STATUS_COL} = EXCLUDED.{PDF_STATUS_COL},
                 updated_at = NOW(),
-                retry_count = COALESCE({META_TABLE}.retry_count, 0) + $17
+                retry_count = COALESCE({META_TABLE}.retry_count, 0) + $18
             ''',
             int(payload["report_id"]),
             payload.get("firm_nm"),
             payload.get("title"),
             payload.get("reg_dt"),
             payload.get("pdf_url"),
+            payload.get("pdf_hash"),
             payload.get("download_url"),
             payload.get("telegram_url"),
             payload.get("key"),
@@ -985,7 +997,6 @@ class PDFArchiver:
             file_size,
             page_count,
             pdf_status,
-            None,
             None,
             retry_delta,
         )
@@ -1022,6 +1033,7 @@ class PDFArchiver:
                     writer TEXT,
                     mkt_tp TEXT,
                     pdf_url TEXT,
+                    pdf_hash BYTEA,
                     download_url TEXT,
                     telegram_url TEXT,
                     key TEXT,
@@ -1056,36 +1068,37 @@ class PDFArchiver:
                         R.article_title,
                         R.reg_dt,
                         R.{PDF_STATUS_COL} AS pdf_status,
-                        {_normalize_pdf_url_sql('R.pdf_url')} AS pdf_url_norm
+                        R.{PDF_HASH_COL} AS pdf_hash,
+                        COALESCE(ENCODE(R.{PDF_HASH_COL}, 'hex'), {_normalize_pdf_url_sql('R.pdf_url')}) AS pdf_record_key
                     FROM {SOURCE_TABLE} R
                     WHERE R.{PDF_STATUS_COL} IN (0, 3)
                       AND COALESCE(R.retry_count, 0) < 5
                       AND R.firm_nm NOT IN ({excluded})
                       AND R.report_id IS NOT NULL
                 ),
-                stored_urls AS (
-                    SELECT DISTINCT NULLIF(BTRIM(pdf_url), '') AS pdf_url_norm
+                stored_keys AS (
+                    SELECT DISTINCT COALESCE(ENCODE({PDF_HASH_COL}, 'hex'), NULLIF(BTRIM(pdf_url), '')) AS pdf_record_key
                     FROM {SOURCE_TABLE}
-                    WHERE NULLIF(BTRIM(pdf_url), '') IS NOT NULL
+                    WHERE ({PDF_HASH_COL} IS NOT NULL OR NULLIF(BTRIM(pdf_url), '') IS NOT NULL)
                       AND {PDF_STATUS_COL} = 2
                     UNION
-                    SELECT DISTINCT NULLIF(BTRIM(pdf_url), '') AS pdf_url_norm
+                    SELECT DISTINCT COALESCE(ENCODE({PDF_HASH_COL}, 'hex'), NULLIF(BTRIM(pdf_url), '')) AS pdf_record_key
                     FROM {META_TABLE}
-                    WHERE NULLIF(BTRIM(pdf_url), '') IS NOT NULL
+                    WHERE ({PDF_HASH_COL} IS NOT NULL OR NULLIF(BTRIM(pdf_url), '') IS NOT NULL)
                       AND COALESCE({PDF_STATUS_COL}, sync_status, 0) = 2
                 ),
                 canonical_pdf_rows AS (
-                    SELECT DISTINCT ON (pdf_url_norm)
+                    SELECT DISTINCT ON (pdf_record_key)
                         *
                     FROM source_rows
-                    WHERE pdf_url_norm IS NOT NULL
-                      AND pdf_url_norm NOT IN (SELECT pdf_url_norm FROM stored_urls)
-                    ORDER BY pdf_url_norm, report_id ASC
+                    WHERE pdf_record_key IS NOT NULL
+                      AND pdf_record_key NOT IN (SELECT pdf_record_key FROM stored_keys)
+                    ORDER BY pdf_record_key, report_id ASC
                 ),
                 single_rows AS (
                     SELECT *
                     FROM source_rows
-                    WHERE pdf_url_norm IS NULL
+                    WHERE pdf_record_key IS NULL
                 ),
                 ordered_candidates AS (
                     SELECT *
@@ -1094,7 +1107,7 @@ class PDFArchiver:
                         UNION ALL
                         SELECT * FROM single_rows
                     ) candidates
-                    ORDER BY (CASE WHEN pdf_url_norm IS NULL THEN 1 ELSE 0 END), (CASE WHEN pdf_status = 3 THEN 0 ELSE 1 END), reg_dt DESC, report_id DESC
+                    ORDER BY (CASE WHEN pdf_record_key IS NULL THEN 1 ELSE 0 END), (CASE WHEN pdf_status = 3 THEN 0 ELSE 1 END), reg_dt DESC, report_id DESC
                     LIMIT {BATCH_SIZE}
                 )
                 SELECT id, report_id, sec_firm_order, key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt

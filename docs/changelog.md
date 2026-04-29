@@ -47,12 +47,13 @@
 
 ## 2026-04-29
 
-### `pdf_canonical_url` 도입 TODO
-- [ ] `tbl_sec_reports`와 `tbl_sec_reports_pdf_archive`에 `pdf_canonical_url` 컬럼 추가
-- [ ] `pdf_url` 정규화 규칙 확정 및 source/archive 백필
-- [ ] `pdf_canonical_url` 기반 unique index 추가
-- [ ] 다운로드 대상 선별을 `pdf_canonical_url` 기준으로만 canonical row 1개 선택하도록 유지
-- [ ] 동일 `pdf_canonical_url`을 가진 source row 전체에 상태 업데이트 전파
-- [ ] 레포트 리스트 조회는 `pdf_canonical_url -> archive` 조인으로 page_count, file_size, checksum 노출
+### `pdf_hash` 도입 TODO
+- [ ] `tbl_sec_reports`와 `tbl_sec_reports_pdf_archive`에 `pdf_hash`(BINARY(32) / PostgreSQL `BYTEA`) 컬럼 추가
+- [ ] 다운로드 성공 시 SHA-256 32바이트 해시를 source/archive 둘 다에 적재
+- [ ] 기존 archive 파일과 source 레코드를 대상으로 `pdf_hash` 백필 스크립트 추가
+- [ ] `pdf_hash` 기반 unique index 추가
+- [ ] 다운로드 대상 선별은 `pdf_hash`가 있으면 우선 사용하고, 없으면 기존 `pdf_url` 보조키로 canonical row 1개 선택
+- [ ] 동일 `pdf_hash`를 가진 source row 전체에 상태 업데이트 전파
+- [ ] 레포트 리스트 조회는 `pdf_hash -> archive` 조인으로 page_count, file_size, checksum 노출
 - [ ] 중복 PDF survivor는 최소 `report_id`로 고정
-- [ ] survivor 기준 외 duplicate row와 OneDrive 파일 정리 절차를 분리해서 진행
+- [ ] survivor 기준 외 duplicate row와 OneDrive 파일 정리 절차는 별도 진행
