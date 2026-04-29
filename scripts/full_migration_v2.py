@@ -26,12 +26,22 @@ async def migrate():
         await conn.execute(f"""
             ALTER TABLE {PDF_ARCHIVE_TABLE} 
             ADD COLUMN IF NOT EXISTS "pdf_url" TEXT,
+            ADD COLUMN IF NOT EXISTS "pdf_hash" BYTEA,
             ADD COLUMN IF NOT EXISTS "download_url" TEXT,
             ADD COLUMN IF NOT EXISTS "telegram_url" TEXT,
             ADD COLUMN IF NOT EXISTS "key" TEXT,
             ADD COLUMN IF NOT EXISTS "archive_status" TEXT,
             ADD COLUMN IF NOT EXISTS "file_name" TEXT,
             ADD COLUMN IF NOT EXISTS "download_status_yn" TEXT,
+            ADD COLUMN IF NOT EXISTS "title" TEXT,
+            ADD COLUMN IF NOT EXISTS "author" TEXT,
+            ADD COLUMN IF NOT EXISTS "has_text" BOOLEAN,
+            ADD COLUMN IF NOT EXISTS "is_encrypted" BOOLEAN,
+            ADD COLUMN IF NOT EXISTS "storage_backend" TEXT DEFAULT 'onedrive',
+            ADD COLUMN IF NOT EXISTS "storage_key" TEXT,
+            ADD COLUMN IF NOT EXISTS "last_accessed_at" TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ DEFAULT NOW(),
+            ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMPTZ DEFAULT NOW(),
             ADD COLUMN IF NOT EXISTS "pdf_sync_status" INTEGER DEFAULT 0,
             ADD COLUMN IF NOT EXISTS "sync_status" INTEGER DEFAULT 0,
             ADD COLUMN IF NOT EXISTS "retry_count" INTEGER DEFAULT 0;
@@ -48,19 +58,24 @@ async def migrate():
         # UPSERT Query
         upsert_query = f"""
             INSERT INTO {PDF_ARCHIVE_TABLE} (
-                report_id, pdf_url, download_url, telegram_url, 
-                key, archive_status, file_name, download_status_yn, 
+                report_id, pdf_url, pdf_hash, title, author, download_url, telegram_url, 
+                key, archive_status, file_name, download_status_yn, storage_backend, storage_key, 
                 pdf_sync_status, sync_status, retry_count, file_path
             )
             SELECT 
                 report_id, 
                 "PDF_URL", 
+                NULL,
+                "ARTICLE_TITLE",
+                "WRITER",
                 "DOWNLOAD_URL", 
                 "TELEGRAM_URL", 
                 "KEY", 
                 "ARCHIVE_STATUS", 
                 "ARCHIVE_FILE_NAME", 
                 "DOWNLOAD_STATUS_YN", 
+                'onedrive',
+                "ARCHIVE_PATH",
                 COALESCE("pdf_sync_status", sync_status, 0), 
                 sync_status, 
                 retry_count,

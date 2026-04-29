@@ -19,10 +19,20 @@ async def migrate_status_2():
 
     await conn.execute(f"""
         ALTER TABLE {PDF_ARCHIVE_TABLE}
+        ADD COLUMN IF NOT EXISTS "pdf_hash" BYTEA,
+        ADD COLUMN IF NOT EXISTS "title" TEXT,
+        ADD COLUMN IF NOT EXISTS "author" TEXT,
+        ADD COLUMN IF NOT EXISTS "has_text" BOOLEAN,
+        ADD COLUMN IF NOT EXISTS "is_encrypted" BOOLEAN,
+        ADD COLUMN IF NOT EXISTS "storage_backend" TEXT DEFAULT 'onedrive',
+        ADD COLUMN IF NOT EXISTS "storage_key" TEXT,
+        ADD COLUMN IF NOT EXISTS "last_accessed_at" TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ DEFAULT NOW(),
+        ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMPTZ DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS "pdf_sync_status" INTEGER DEFAULT 0,
         ADD COLUMN IF NOT EXISTS "sync_status" INTEGER DEFAULT 0,
         ADD COLUMN IF NOT EXISTS "retry_count" INTEGER DEFAULT 0;
-    """)
+        """)
     
     # sync_status=2 이고 아직 아카이브 테이블에 없는 데이터 이관
     # file_path가 없더라도 우선 메타데이터 확보를 위해 이관 (필요시 'N/A' 또는 NULL 처리)

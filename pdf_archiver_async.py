@@ -123,6 +123,17 @@ async def ensure_pdf_sync_status_schema(conn):
             await conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {PDF_HASH_COL} BYTEA")
 
         if table_name == META_TABLE:
+            for column_name, column_sql in (
+                ("title", "TEXT"),
+                ("author", "TEXT"),
+                ("has_text", "BOOLEAN"),
+                ("is_encrypted", "BOOLEAN"),
+                ("storage_backend", "TEXT DEFAULT 'onedrive'"),
+                ("storage_key", "TEXT"),
+                ("last_accessed_at", "TIMESTAMPTZ"),
+            ):
+                if not await _table_has_column(conn, table_name, column_name):
+                    await conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
             if not await _table_has_column(conn, table_name, "created_at"):
                 await conn.execute(f"ALTER TABLE {table_name} ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()")
             if not await _table_has_column(conn, table_name, "updated_at"):
@@ -943,9 +954,14 @@ class PDFArchiver:
                 report_id,
                 firm_nm,
                 title,
+                author,
                 reg_dt,
                 pdf_url,
                 {PDF_HASH_COL},
+                has_text,
+                is_encrypted,
+                storage_backend,
+                storage_key,
                 download_url,
                 telegram_url,
                 key,
@@ -955,19 +971,25 @@ class PDFArchiver:
                 file_path,
                 file_size,
                 page_count,
+                last_accessed_at,
                 {PDF_STATUS_COL},
                 created_at,
                 updated_at,
                 retry_count
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17, NOW()), NOW(), $18
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, COALESCE($23, NOW()), NOW(), $24
             )
             ON CONFLICT (report_id) DO UPDATE SET
                 firm_nm = EXCLUDED.firm_nm,
                 title = EXCLUDED.title,
+                author = COALESCE(EXCLUDED.author, {META_TABLE}.author),
                 reg_dt = EXCLUDED.reg_dt,
                 pdf_url = EXCLUDED.pdf_url,
                 {PDF_HASH_COL} = COALESCE(EXCLUDED.{PDF_HASH_COL}, {META_TABLE}.{PDF_HASH_COL}),
+                has_text = COALESCE(EXCLUDED.has_text, {META_TABLE}.has_text),
+                is_encrypted = COALESCE(EXCLUDED.is_encrypted, {META_TABLE}.is_encrypted),
+                storage_backend = COALESCE(EXCLUDED.storage_backend, {META_TABLE}.storage_backend),
+                storage_key = COALESCE(EXCLUDED.storage_key, {META_TABLE}.storage_key),
                 download_url = EXCLUDED.download_url,
                 telegram_url = EXCLUDED.telegram_url,
                 key = EXCLUDED.key,
@@ -977,16 +999,22 @@ class PDFArchiver:
                 file_path = COALESCE(EXCLUDED.file_path, {META_TABLE}.file_path),
                 file_size = COALESCE(EXCLUDED.file_size, {META_TABLE}.file_size),
                 page_count = COALESCE(EXCLUDED.page_count, {META_TABLE}.page_count),
+                last_accessed_at = COALESCE(EXCLUDED.last_accessed_at, {META_TABLE}.last_accessed_at),
                 {PDF_STATUS_COL} = EXCLUDED.{PDF_STATUS_COL},
                 updated_at = NOW(),
-                retry_count = COALESCE({META_TABLE}.retry_count, 0) + $18
+                retry_count = COALESCE({META_TABLE}.retry_count, 0) + $24
             ''',
             int(payload["report_id"]),
             payload.get("firm_nm"),
             payload.get("title"),
+            payload.get("author"),
             payload.get("reg_dt"),
             payload.get("pdf_url"),
             payload.get("pdf_hash"),
+            payload.get("has_text"),
+            payload.get("is_encrypted"),
+            payload.get("storage_backend") or "onedrive",
+            payload.get("storage_key") or (str(file_path) if file_path else None),
             payload.get("download_url"),
             payload.get("telegram_url"),
             payload.get("key"),
@@ -996,6 +1024,7 @@ class PDFArchiver:
             str(file_path) if file_path else None,
             file_size,
             page_count,
+            payload.get("last_accessed_at"),
             pdf_status,
             None,
             retry_delta,
@@ -1034,6 +1063,12 @@ class PDFArchiver:
                     mkt_tp TEXT,
                     pdf_url TEXT,
                     pdf_hash BYTEA,
+                    title TEXT,
+                    author TEXT,
+                    has_text BOOLEAN,
+                    is_encrypted BOOLEAN,
+                    storage_backend TEXT DEFAULT 'onedrive',
+                    storage_key TEXT,
                     download_url TEXT,
                     telegram_url TEXT,
                     key TEXT,
@@ -1043,6 +1078,9 @@ class PDFArchiver:
                     file_path TEXT,
                     file_size BIGINT,
                     page_count INT,
+                    last_accessed_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
                     pdf_sync_status INTEGER DEFAULT 0,
                     sync_status INTEGER DEFAULT 0,
                     retry_count INTEGER DEFAULT 0

@@ -50,7 +50,8 @@
 ### `pdf_hash` 도입 TODO
 - [ ] `tbl_sec_reports`와 `tbl_sec_reports_pdf_archive`에 `pdf_hash`(BINARY(32) / PostgreSQL `BYTEA`) 컬럼 추가
 - [ ] 다운로드 성공 시 SHA-256 32바이트 해시를 source/archive 둘 다에 적재
-- [ ] 기존 archive 파일과 source 레코드를 대상으로 `pdf_hash` 백필 스크립트 추가
+- [x] 기존 archive 파일과 source 레코드를 대상으로 `pdf_hash` 백필 스크립트 추가
+- [x] 백필 스크립트를 크론탭에 15분 주기로 등록
 - [ ] `pdf_hash` 기반 unique index 추가
 - [ ] 다운로드 대상 선별은 `pdf_hash`가 있으면 우선 사용하고, 없으면 기존 `pdf_url` 보조키로 canonical row 1개 선택
 - [ ] 동일 `pdf_hash`를 가진 source row 전체에 상태 업데이트 전파
