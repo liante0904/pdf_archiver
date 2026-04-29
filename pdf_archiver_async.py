@@ -192,6 +192,17 @@ def _truncate(value, limit=160):
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
+def _normalize_pdf_url_value(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_pdf_url_sql(column_name):
+    return f"NULLIF(BTRIM({column_name}), '')"
+
+
 def _pdf_signature_offset(data: bytes, max_scan=2048):
     if not data:
         return None
@@ -887,17 +898,33 @@ class PDFArchiver:
         return False
 
     async def _update_source_workflow(self, conn, payload, pdf_status, retry_delta=0):
-        await conn.execute(
-            f'''
-            UPDATE {SOURCE_TABLE}
-            SET {PDF_STATUS_COL} = $2,
-                retry_count = COALESCE(retry_count, 0) + $3
-            WHERE report_id = $1
-            ''',
-            int(payload["report_id"]),
-            pdf_status,
-            retry_delta,
-        )
+        pdf_url_norm = _normalize_pdf_url_value(payload.get("pdf_url"))
+        if pdf_url_norm:
+            await conn.execute(
+                f'''
+                UPDATE {SOURCE_TABLE}
+                SET {PDF_STATUS_COL} = $2,
+                    retry_count = COALESCE(retry_count, 0) + $3
+                WHERE report_id = $1
+                   OR NULLIF(BTRIM(pdf_url), '') = $4
+                ''',
+                int(payload["report_id"]),
+                pdf_status,
+                retry_delta,
+                pdf_url_norm,
+            )
+        else:
+            await conn.execute(
+                f'''
+                UPDATE {SOURCE_TABLE}
+                SET {PDF_STATUS_COL} = $2,
+                    retry_count = COALESCE(retry_count, 0) + $3
+                WHERE report_id = $1
+                ''',
+                int(payload["report_id"]),
+                pdf_status,
+                retry_delta,
+            )
 
     async def _upsert_archive_workflow(self, conn, payload, pdf_status, retry_delta=0, file_path=None, file_size=None, page_count=None, archive_status=None, download_status_yn=None):
         file_name = Path(file_path).name if file_path else None
@@ -1013,27 +1040,65 @@ class PDFArchiver:
 
             excluded = ', '.join(f"'{f}'" for f in EXCLUDED_FIRMS)
             query = f"""
-                SELECT
-                       R.report_id AS id,
-                       R.report_id,
-                       CASE
-                           WHEN R.firm_nm IN ('DB금융투자', 'DB증권') THEN {DBFI_FIRM_ORDER}
-                           ELSE NULL
-                       END AS sec_firm_order,
-                       R.key,
-                       R.pdf_url,
-                       R.telegram_url,
-                       R.download_url,
-                       R.firm_nm,
-                       R.article_title,
-                       R.reg_dt
-                FROM {SOURCE_TABLE} R
-                WHERE R.{PDF_STATUS_COL} IN (0, 3)
-                  AND COALESCE(R.retry_count, 0) < 5
-                  AND R.firm_nm NOT IN ({excluded})
-                  AND R.report_id IS NOT NULL
-                ORDER BY (CASE WHEN R.{PDF_STATUS_COL} = 3 THEN 0 ELSE 1 END), R.reg_dt DESC, R.report_id DESC
-                LIMIT {BATCH_SIZE}
+                WITH source_rows AS (
+                    SELECT
+                        R.report_id AS id,
+                        R.report_id,
+                        CASE
+                            WHEN R.firm_nm IN ('DB금융투자', 'DB증권') THEN {DBFI_FIRM_ORDER}
+                            ELSE NULL
+                        END AS sec_firm_order,
+                        R.key,
+                        R.pdf_url,
+                        R.telegram_url,
+                        R.download_url,
+                        R.firm_nm,
+                        R.article_title,
+                        R.reg_dt,
+                        R.{PDF_STATUS_COL} AS pdf_status,
+                        {_normalize_pdf_url_sql('R.pdf_url')} AS pdf_url_norm
+                    FROM {SOURCE_TABLE} R
+                    WHERE R.{PDF_STATUS_COL} IN (0, 3)
+                      AND COALESCE(R.retry_count, 0) < 5
+                      AND R.firm_nm NOT IN ({excluded})
+                      AND R.report_id IS NOT NULL
+                ),
+                stored_urls AS (
+                    SELECT DISTINCT NULLIF(BTRIM(pdf_url), '') AS pdf_url_norm
+                    FROM {SOURCE_TABLE}
+                    WHERE NULLIF(BTRIM(pdf_url), '') IS NOT NULL
+                      AND {PDF_STATUS_COL} = 2
+                    UNION
+                    SELECT DISTINCT NULLIF(BTRIM(pdf_url), '') AS pdf_url_norm
+                    FROM {META_TABLE}
+                    WHERE NULLIF(BTRIM(pdf_url), '') IS NOT NULL
+                      AND COALESCE({PDF_STATUS_COL}, sync_status, 0) = 2
+                ),
+                canonical_pdf_rows AS (
+                    SELECT DISTINCT ON (pdf_url_norm)
+                        *
+                    FROM source_rows
+                    WHERE pdf_url_norm IS NOT NULL
+                      AND pdf_url_norm NOT IN (SELECT pdf_url_norm FROM stored_urls)
+                    ORDER BY pdf_url_norm, report_id ASC
+                ),
+                single_rows AS (
+                    SELECT *
+                    FROM source_rows
+                    WHERE pdf_url_norm IS NULL
+                ),
+                ordered_candidates AS (
+                    SELECT *
+                    FROM (
+                        SELECT * FROM canonical_pdf_rows
+                        UNION ALL
+                        SELECT * FROM single_rows
+                    ) candidates
+                    ORDER BY (CASE WHEN pdf_url_norm IS NULL THEN 1 ELSE 0 END), (CASE WHEN pdf_status = 3 THEN 0 ELSE 1 END), reg_dt DESC, report_id DESC
+                    LIMIT {BATCH_SIZE}
+                )
+                SELECT id, report_id, sec_firm_order, key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt
+                FROM ordered_candidates
             """
 
             targets = await conn.fetch(query)

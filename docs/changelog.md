@@ -44,3 +44,15 @@
 ### 실행 환경
 - `docker-compose.yml`은 Postgres 기반 실행만 남겼다.
 - 테이블명 교체용 환경변수와 PDF 워크플로우 상태값 기준을 명시했다.
+
+## 2026-04-29
+
+### `pdf_canonical_url` 도입 TODO
+- [ ] `tbl_sec_reports`와 `tbl_sec_reports_pdf_archive`에 `pdf_canonical_url` 컬럼 추가
+- [ ] `pdf_url` 정규화 규칙 확정 및 source/archive 백필
+- [ ] `pdf_canonical_url` 기반 unique index 추가
+- [ ] 다운로드 대상 선별을 `pdf_canonical_url` 기준으로만 canonical row 1개 선택하도록 유지
+- [ ] 동일 `pdf_canonical_url`을 가진 source row 전체에 상태 업데이트 전파
+- [ ] 레포트 리스트 조회는 `pdf_canonical_url -> archive` 조인으로 page_count, file_size, checksum 노출
+- [ ] 중복 PDF survivor는 최소 `report_id`로 고정
+- [ ] survivor 기준 외 duplicate row와 OneDrive 파일 정리 절차를 분리해서 진행
