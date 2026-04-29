@@ -106,9 +106,30 @@ async def _get_source_text_column(conn, preferred_names):
     return None
 
 
+async def _ensure_backfill_schema(conn):
+    for table_name in (SOURCE_TABLE, ARCHIVE_TABLE):
+        if not await _table_has_column(conn, table_name, "pdf_hash"):
+            await conn.execute(f"ALTER TABLE {table_name} ADD COLUMN pdf_hash BYTEA")
+
+    for column_name, column_sql in (
+        ("title", "TEXT"),
+        ("author", "TEXT"),
+        ("has_text", "BOOLEAN"),
+        ("is_encrypted", "BOOLEAN"),
+        ("storage_backend", "TEXT DEFAULT 'onedrive'"),
+        ("storage_key", "TEXT"),
+        ("last_accessed_at", "TIMESTAMPTZ"),
+        ("created_at", "TIMESTAMPTZ DEFAULT NOW()"),
+        ("updated_at", "TIMESTAMPTZ DEFAULT NOW()"),
+    ):
+        if not await _table_has_column(conn, ARCHIVE_TABLE, column_name):
+            await conn.execute(f"ALTER TABLE {ARCHIVE_TABLE} ADD COLUMN {column_name} {column_sql}")
+
+
 async def backfill_pdf_hash():
     conn = await asyncpg.connect(build_postgres_dsn())
     try:
+        await _ensure_backfill_schema(conn)
         source_path_expr = await _get_source_path_expr(conn)
         source_title_col = await _get_source_text_column(conn, ("article_title", "title"))
         source_author_col = await _get_source_text_column(conn, ("writer", "author"))
