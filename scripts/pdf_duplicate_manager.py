@@ -94,7 +94,7 @@ def run_cleanup(target_subfolder, execute=False):
         print(f"[{target_subfolder}] 건조 실행(Dry Run) 완료.")
         print(f"중복 ID: {found_duplicates}개 / 삭제 예정: {total_deleted}개")
         print(f"실제로 삭제하려면 명령어 뒤에 --execute 를 붙여주세요.")
-        print(f"예시: python3 pdf_duplicate_manager.py {target_subfolder} --execute")
+        print(f"예시: python3 scripts/pdf_duplicate_manager.py {target_subfolder} --execute")
         print("="*50)
     else:
         print(f"\n[{target_subfolder}] 정리 완료. 총 {total_deleted}개의 파일을 삭제했습니다.")

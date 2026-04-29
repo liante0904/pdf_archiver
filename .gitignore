@@ -1,0 +1,16 @@
+.env
+.env.*
+.codex
+.geminiignore
+.pytest_cache/
+__pycache__/
+*.pyc
+.venv/
+*.log
+log/
+downloads/
+tmp/
+scripts/__pycache__/
+tests/__pycache__/
+tests/ls_*.txt
+docs/.gitkeep

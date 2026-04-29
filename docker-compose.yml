@@ -1,0 +1,31 @@
+services:
+  pdf-archiver:
+    build: .
+    container_name: pdf-archiver-prod
+    user: "1001:1001"
+    restart: "no" # 배치 작업이므로 완료 후 자동 재시작 방지 (외부 크론탭 등에서 관리 가능)
+    environment:
+      - TZ=Asia/Seoul
+      - WARP_PROXY=cloudflare-warp:9091
+      - UV_CACHE_DIR=/tmp/uv-cache
+      - LOG_FILE=/app/log/pdf_archiver_async.log
+      - LOCAL_BUFFER_DIR=/app/downloads/pdf_archive_temp
+      - WORKSPACE_SECRET_FILE=/secrets/pdf_archiver/.json
+      - SOURCE_REPORTS_TABLE_NAME=${SOURCE_REPORTS_TABLE_NAME:-tbl_sec_reports}
+      - PDF_ARCHIVE_TABLE_NAME=${PDF_ARCHIVE_TABLE_NAME:-tbl_sec_reports_pdf_archive}
+    volumes:
+      # 워크스페이스별 비밀값 JSON
+      - /home/ubuntu/secrets/pdf_archiver:/secrets/pdf_archiver:ro
+      # rclone 설정 파일 마운트
+      - /home/ubuntu/.config/rclone/rclone.conf:/home/ubuntu/.config/rclone/rclone.conf
+      # 로그 저장
+      - /home/ubuntu/log:/app/log
+      # 임시 다운로드 경로
+      - /home/ubuntu/downloads/pdf_archive_temp:/app/downloads/pdf_archive_temp
+    networks:
+      - public-net
+    command: ["uv", "run", "pdf_archiver_async.py"]
+
+networks:
+  public-net:
+    external: true

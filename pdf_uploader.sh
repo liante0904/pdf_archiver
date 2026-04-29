@@ -52,7 +52,7 @@ echo "[$(date)] Rclone move finished. Updating DB status..."
 $PYTHON_BIN -c "
 import sqlite3, os
 conn = sqlite3.connect('$DB_PATH')
-rows = conn.execute('SELECT report_id, file_path FROM pdf_archive_metadata').fetchall()
+rows = conn.execute('SELECT report_id, file_path FROM tbl_sec_reports_pdf_archive').fetchall()
 success_count = 0
 for r_id, path in rows:
     if not os.path.exists(path):
