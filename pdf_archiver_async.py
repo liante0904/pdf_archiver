@@ -971,7 +971,7 @@ class PDFArchiver:
         self.processed_count = 0
         self._counter_lock = asyncio.Lock()
 
-    async def _increment_processed(self, ok, firm, title, pdf_url=None):
+    async def _increment_processed(self, ok, firm, title, report_id, pdf_url=None):
         async with self._counter_lock:
             self.processed_count += 1
             total = self.total_targets if self.total_targets > 0 else 1
@@ -985,8 +985,8 @@ class PDFArchiver:
             emoji = "✅" if ok else "❌"
             short_url = _truncate(pdf_url, 60) if pdf_url else "N/A"
             
-            # 로그 출력: 상태바 + 퍼센트 + 결과 이모티콘 + 증권사 | 제목
-            logging.info(f"|{bar}| {pct:5.1f}% {emoji} [{self.processed_count:3}/{self.total_targets:3}] {firm} | {title[:25]}... | {short_url}")
+            # 로그 출력: 상태바 + 퍼센트 + 결과 이모티콘 + report_id + 증권사 | 제목
+            logging.info(f"|{bar}| {pct:5.1f}% {emoji} [{self.processed_count:3}/{self.total_targets:3}] report_id={report_id} {firm} | {title[:25]}... | {short_url}")
 
     def _make_file_path(self, firm, title, reg_dt, report_id):
         clean_dt = re.sub(r'[^0-9]', '', str(reg_dt)) if reg_dt else "00000000"
@@ -1126,7 +1126,7 @@ class PDFArchiver:
                         if use_proxy: os.environ.pop("all_proxy", None)
                         if tmp_path.exists(): tmp_path.unlink(missing_ok=True)
         
-        await self._increment_processed(ok, firm, title, pdf_url=pdf_url or key_url)
+        await self._increment_processed(ok, firm, title, report_id, pdf_url=pdf_url or key_url)
         return ok
 
     async def _update_source_workflow(self, conn, payload, pdf_status, retry_delta=0):
@@ -1841,7 +1841,14 @@ class PDFArchiver:
 
     async def _mark_download_failures(self, conn, failed_targets) -> None:
         for target in failed_targets:
-            await self._update_source_workflow(conn, _row_payload(target), 3, retry_delta=1)
+            payload = _row_payload(target)
+            logging.warning(
+                "DOWNLOAD FAILED report_id=%s firm=%s title=%s pdf_url=%s",
+                payload["report_id"], payload["firm_nm"],
+                _truncate(payload["title"], 60),
+                _truncate(payload["pdf_url"], 120),
+            )
+            await self._update_source_workflow(conn, payload, 3, retry_delta=1)
 
     async def _apply_upload_results(self, conn, uploaded_payloads) -> None:
         if uploaded_payloads:
