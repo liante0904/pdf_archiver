@@ -288,26 +288,11 @@ def _is_pdf_payload(data: bytes):
     return _pdf_signature_offset(data) is not None
 
 
-def _download_context(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt):
-    return {
-        "row_id": row_id,
-        "report_id": report_id,
-        "sec_firm_order": sec_firm_order,
-        "firm_nm": firm,
-        "title": title,
-        "reg_dt": reg_dt,
-        "key": _truncate(key_url),
-        "pdf_url": _truncate(pdf_url),
-        "telegram_url": _truncate(tel_url),
-        "download_url": _truncate(dw_url),
-    }
-
-
 def _report_prefix(firm, title, report_id, reg_dt=None):
     return f"[{firm} | {title} | report_id={report_id}" + (f" | reg_dt={reg_dt}]" if reg_dt else "]")
 
 
-def _download_sources_for_firm(firm, key_url, pdf_url, tel_url, dw_url):
+def _download_sources_for_firm(key_url, pdf_url, tel_url, dw_url):
     sources = [u for u in (pdf_url, tel_url, dw_url, key_url) if u and str(u).startswith("http")]
     return sources
 
@@ -988,6 +973,14 @@ class PDFArchiver:
             # 로그 출력: 상태바 + 퍼센트 + 결과 이모티콘 + report_id + 증권사 | 제목
             logging.info(f"|{bar}| {pct:5.1f}% {emoji} [{self.processed_count:3}/{self.total_targets:3}] report_id={report_id} {firm} | {title[:25]}... | {short_url}")
 
+    def _add_success_record(self, row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, size, pages, pdf_hash):
+        self.success_downloads.append(WorkflowRecord({
+            "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
+            "key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
+            "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
+            "size": size, "pages": pages, "pdf_hash": pdf_hash,
+        }))
+
     def _make_file_path(self, firm, title, reg_dt, report_id):
         clean_dt = re.sub(r'[^0-9]', '', str(reg_dt)) if reg_dt else "00000000"
         y_m = f"{clean_dt[:4]}-{clean_dt[4:6]}"
@@ -1001,7 +994,7 @@ class PDFArchiver:
     async def download_task(self, row):
         # row: (id, report_id, sec_firm_order, key, pdf_url, telegram_url, download_url, firm, title, reg_dt)
         row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt = row
-        raw_urls = _download_sources_for_firm(firm, key_url, pdf_url, tel_url, dw_url)
+        raw_urls = _download_sources_for_firm(key_url, pdf_url, tel_url, dw_url)
         candidates = build_candidate_urls(firm, raw_urls)
         
         proxy_url = os.getenv("WARP_PROXY")
@@ -1023,12 +1016,7 @@ class PDFArchiver:
                     if Config.DBFI_REQUEST_DELAY_SECONDS > 0:
                         await asyncio.sleep(Config.DBFI_REQUEST_DELAY_SECONDS)
                 if dbfi_result:
-                    self.success_downloads.append(WorkflowRecord({
-                        "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
-                        "key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
-                        "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
-                        "size": dbfi_result["size"], "pages": dbfi_result["pages"], "pdf_hash": dbfi_result.get("pdf_hash"),
-                    }))
+                    self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, dbfi_result["size"], dbfi_result["pages"], dbfi_result.get("pdf_hash"))
                     ok = True
 
             # 2. 미래에셋증권 특수 처리
@@ -1036,12 +1024,7 @@ class PDFArchiver:
                 # Mirae는 전달받은 모든 후보 URL들과 게시판 검색 결과를 병합하여 시도함
                 mirae_result = await download_mirae_pdf(candidates, target_path, title, report_id, firm, reg_dt)
                 if mirae_result:
-                    self.success_downloads.append(WorkflowRecord({
-                        "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
-                        "key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
-                        "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
-                        "size": mirae_result["size"], "pages": mirae_result["pages"], "pdf_hash": mirae_result.get("pdf_hash"),
-                    }))
+                    self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, mirae_result["size"], mirae_result["pages"], mirae_result.get("pdf_hash"))
                     ok = True
 
             # 3. DS투자증권 특수 처리
@@ -1049,12 +1032,7 @@ class PDFArchiver:
                 for url in candidates:
                     ds_result = await download_ds_pdf(url, target_path, title, report_id, firm, reg_dt)
                     if ds_result:
-                        self.success_downloads.append(WorkflowRecord({
-                            "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
-                            "key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
-                            "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
-                            "size": ds_result["size"], "pages": ds_result["pages"], "pdf_hash": ds_result.get("pdf_hash"),
-                        }))
+                        self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, ds_result["size"], ds_result["pages"], ds_result.get("pdf_hash"))
                         ok = True
                         break
 
@@ -1063,12 +1041,7 @@ class PDFArchiver:
             if not ok and "LS" in firm:
                 ls_result = await download_ls_pdf(candidates, target_path, title, report_id, firm, reg_dt)
                 if ls_result:
-                    self.success_downloads.append(WorkflowRecord({
-                        "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
-                        "key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
-                        "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
-                        "size": ls_result["size"], "pages": ls_result["pages"], "pdf_hash": ls_result.get("pdf_hash"),
-                    }))
+                    self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, ls_result["size"], ls_result["pages"], ls_result.get("pdf_hash"))
                     ok = True
             # 4. 일반 다운로드 (wget)
             if not ok and firm not in ("미래에셋증권", "DS투자증권") and sec_firm_order != Config.DBFI_FIRM_ORDER:
@@ -1098,12 +1071,7 @@ class PDFArchiver:
                                 if target_path.exists(): target_path.unlink()
                                 tmp_path.rename(target_path)
                                 pages = await get_pdf_page_count(target_path)
-                                self.success_downloads.append(WorkflowRecord({
-                                    "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
-                                    "key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
-                                    "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
-                                    "size": target_path.stat().st_size, "pages": pages, "pdf_hash": _pdf_hash_bytes(body),
-                                }))
+                                self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, target_path.stat().st_size, pages, _pdf_hash_bytes(body))
                                 ok = True
                                 break
                         else:
