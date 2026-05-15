@@ -464,7 +464,7 @@ def _origin_referer(url):
 
 
 # --- 4개 증권사 wget 쿠키/Referer 처리 (대신증권, IBK투자증권, 삼성증권, 다올투자증권) ---
-_FIRMS_NEEDING_COOKIE_SESSION = {"대신증권", "IBK투자증권", "삼성증권", "다올투자증권"}
+_FIRMS_NEEDING_COOKIE_SESSION = {"대신증권", "IBK투자증권", "삼성증권", "다올투자증권", "교보증권"}
 
 def _firm_base_domain(url: str) -> str | None:
     """URL의 scheme + netloc (도메인 루트) 반환"""
@@ -733,6 +733,204 @@ async def download_mirae_pdf(candidates, target_path, title, report_id, firm, re
         "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
         "pdf_hash": _pdf_hash_bytes(body),
     }
+
+async def download_kb_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+    """교보증권 (iprovest.com) 전용 다운로드.
+    게시판 뷰 페이지(board.php)에 접속하여 실제 PDF 다운로드 URL을 추출한 후 다운로드한다.
+    """
+    tmp_path = target_path.with_suffix(".tmp")
+    # 1. 후보 URL 중 board.php 형태 찾기
+    board_url = None
+    for u in candidates:
+        if "board.php" in u:
+            board_url = u
+            break
+    if not board_url:
+        # board.php 가 없으면 candidates 중 첫 번째 URL을 board.php 로 변환 시도
+        for u in candidates:
+            if "download.php" in u:
+                board_url = u.replace("download.php", "board.php")
+                if "&no=" in board_url:
+                    board_url = board_url.split("&no=")[0]
+                break
+    if not board_url:
+        return None
+
+    # 2. 게시판 뷰 페이지 방문하여 세션 쿠키 획득 및 실제 PDF URL 추출
+    timeout = aiohttp.ClientTimeout(total=30)
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        try:
+            headers = _browser_like_headers()
+            async with session.get(board_url, headers=headers, allow_redirects=True) as resp:
+                board_html = await resp.text()
+                cookies = _cookie_header_from_response(resp)
+
+            # 3. board_html 에서 실제 PDF URL 추출
+            # 교보증권 게시판 패턴: <a href="download.php?filename=...&..."> 또는 onclick="down('...')"
+            pdf_url = None
+            # 패턴 1: download.php?filename=...
+            m = re.search(r'href=["\']([^"\']*download\.php[^"\']*)["\']', board_html, re.I)
+            if m:
+                pdf_url = urljoin(board_url, m.group(1))
+            # 패턴 2: onclick="down('...')"
+            if not pdf_url:
+                m = re.search(r"onclick\s*=\s*['\"]down\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", board_html, re.I)
+                if m:
+                    pdf_url = urljoin(board_url, m.group(1))
+            # 패턴 3: data-url 속성
+            if not pdf_url:
+                m = re.search(r'data-url\s*=\s*["\']([^"\']+)["\']', board_html, re.I)
+                if m:
+                    pdf_url = urljoin(board_url, m.group(1))
+
+            if not pdf_url:
+                logging.warning(
+                    "%s 교보증권: board page에서 PDF URL을 찾을 수 없음 board_url=%s",
+                    _report_prefix(firm, title, report_id, reg_dt),
+                    _truncate(board_url, 160),
+                )
+                return None
+
+            # 4. PDF 다운로드
+            download_headers = _browser_like_headers(referer=board_url)
+            if cookies:
+                download_headers["Cookie"] = cookies
+
+            async with session.get(pdf_url, headers=download_headers, allow_redirects=True) as pdf_resp:
+                body = await pdf_resp.read()
+                content_type = pdf_resp.headers.get("content-type", "")
+                if pdf_resp.status != 200 or "text/html" in content_type.lower() or len(body) < 5000:
+                    return None
+                if not _is_pdf_payload(body):
+                    return None
+
+                tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path.write_bytes(body)
+
+            if target_path.exists():
+                target_path.unlink()
+            tmp_path.rename(target_path)
+            pages = await get_pdf_page_count(target_path)
+            return {
+                "report_id": report_id, "firm": firm, "title": title, "path": target_path,
+                "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+                "pdf_hash": _pdf_hash_bytes(body),
+            }
+        except Exception as e:
+            logging.warning(
+                "%s 교보증권 다운로드 예외: %s: %r",
+                _report_prefix(firm, title, report_id, reg_dt),
+                type(e).__name__, e,
+            )
+            return None
+        finally:
+            tmp_path = target_path.with_suffix(".tmp")
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+
+async def download_hana_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+    """하나증권 전용 다운로드.
+    게시판 목록 페이지에서 현재 유효한 다운로드 URL을 찾아 다운로드한다.
+    하나증권은 파일 구조 변경으로 과거 URL이 유효하지 않을 수 있으므로,
+    게시판에서 실제 다운로드 링크를 다시 추출한다.
+    """
+    tmp_path = target_path.with_suffix(".tmp")
+    # 1. 후보 URL 중 게시판 URL 찾기
+    board_url = None
+    for u in candidates:
+        # 하나증권 게시판 패턴: /board/view/... 또는 /board/content/...
+        if "/board/" in u:
+            board_url = u
+            break
+    if not board_url:
+        # candidates 중 첫 번째 URL을 게시판 URL로 가정
+        board_url = candidates[0] if candidates else None
+    if not board_url:
+        return None
+
+    timeout = aiohttp.ClientTimeout(total=30)
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        try:
+            headers = _browser_like_headers()
+            async with session.get(board_url, headers=headers, allow_redirects=True) as resp:
+                board_html = await resp.text()
+                cookies = _cookie_header_from_response(resp)
+
+            # 2. board_html 에서 실제 PDF 다운로드 URL 추출
+            pdf_url = None
+            # 패턴 1: <a href="...download..."> 또는 <a href="...file...">
+            for pattern in [
+                r'href=["\']([^"\']*download[^"\']*)["\']',
+                r'href=["\']([^"\']*\.pdf[^"\']*)["\']',
+                r'href=["\']([^"\']*file[^"\']*)["\']',
+                r'data-url=["\']([^"\']+)["\']',
+            ]:
+                m = re.search(pattern, board_html, re.I)
+                if m:
+                    pdf_url = urljoin(board_url, m.group(1))
+                    break
+            # 패턴 2: onclick="fnDownload('...')"
+            if not pdf_url:
+                m = re.search(r"onclick\s*=\s*['\"]fnDownload\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", board_html, re.I)
+                if m:
+                    pdf_url = urljoin(board_url, m.group(1))
+
+            if not pdf_url:
+                logging.warning(
+                    "%s 하나증권: board page에서 PDF URL을 찾을 수 없음 board_url=%s",
+                    _report_prefix(firm, title, report_id, reg_dt),
+                    _truncate(board_url, 160),
+                )
+                return None
+
+            # 3. PDF 다운로드
+            download_headers = _browser_like_headers(referer=board_url)
+            if cookies:
+                download_headers["Cookie"] = cookies
+
+            async with session.get(pdf_url, headers=download_headers, allow_redirects=True) as pdf_resp:
+                body = await pdf_resp.read()
+                content_type = pdf_resp.headers.get("content-type", "")
+                if pdf_resp.status != 200 or "text/html" in content_type.lower() or len(body) < 5000:
+                    return None
+                if not _is_pdf_payload(body):
+                    return None
+
+                tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path.write_bytes(body)
+
+            if target_path.exists():
+                target_path.unlink()
+            tmp_path.rename(target_path)
+            pages = await get_pdf_page_count(target_path)
+            return {
+                "report_id": report_id, "firm": firm, "title": title, "path": target_path,
+                "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+                "pdf_hash": _pdf_hash_bytes(body),
+            }
+        except Exception as e:
+            logging.warning(
+                "%s 하나증권 다운로드 예외: %s: %r",
+                _report_prefix(firm, title, report_id, reg_dt),
+                type(e).__name__, e,
+            )
+            return None
+        finally:
+            tmp_path = target_path.with_suffix(".tmp")
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
 
 async def download_ls_pdf(candidates, target_path, title, report_id, firm, reg_dt):
     """LS증권: msg.ls-sec.co.kr 직접 HTTPS or View.jsp → download.jsp 2-step via WARP"""
@@ -1192,8 +1390,22 @@ class PDFArchiver:
                     row_meta, target_path,
                     download_ls_pdf(candidates, target_path, title, report_id, firm, reg_dt),
                 )
-            # 4. 일반 다운로드 (wget) — 4개 증권사(대신/IBK/삼성/다올)는 쿠키+Referer 처리
-            if not ok and firm not in ("미래에셋증권", "DS투자증권") and sec_firm_order != Config.DBFI_FIRM_ORDER:
+            # 3b. 교보증권 특수 처리 (게시판 뷰 페이지에서 실제 PDF URL 추출)
+            if not ok and firm == "교보증권":
+                ok = await self._try_await_record_download(
+                    row_meta, target_path,
+                    download_kb_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                )
+
+            # 3c. 하나증권 특수 처리 (게시판에서 유효한 다운로드 URL 재추출)
+            if not ok and firm == "하나증권":
+                ok = await self._try_await_record_download(
+                    row_meta, target_path,
+                    download_hana_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                )
+
+            # 4. 일반 다운로드 (wget) — 4개 증권사(대신/IBK/삼성/다올/교보)는 쿠키+Referer 처리
+            if not ok and firm not in ("미래에셋증권", "DS투자증권", "교보증권", "하나증권") and sec_firm_order != Config.DBFI_FIRM_ORDER:
                 # 4a. aiohttp로 세션 쿠키 사전 획득
                 cookie_string = ""
                 if firm in _FIRMS_NEEDING_COOKIE_SESSION:
@@ -1360,13 +1572,7 @@ class PDFArchiver:
         rclone_env.setdefault("HOME", os.path.expanduser("~"))
         rclone_env["RCLONE_CONFIG"] = Config.RCLONE_CONFIG
 
-        proc = await asyncio.create_subprocess_exec(
-            Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG,
-            "deletefile", remote_path,
-            env=rclone_env,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        proc = await asyncio.create_subprocess_exec(Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG, "deletefile", remote_path, env=rclone_env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         _, stderr = await proc.communicate()
         stderr_text = stderr.decode("utf-8", errors="replace").strip()
         if proc.returncode == 0 or not remote_dir or not filename:
@@ -1375,20 +1581,8 @@ class PDFArchiver:
             return False, stderr_text
 
         include_filter = f"/{self._rclone_filter_escape(filename)}"
-        logging.warning(
-            "deletefile could not address %s directly; trying filtered delete in parent dir with include=%s",
-            remote_path,
-            include_filter,
-        )
-        fallback = await asyncio.create_subprocess_exec(
-            Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG,
-            "delete", remote_dir,
-            "--max-depth", "1",
-            "--include", include_filter,
-            env=rclone_env,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        logging.warning("deletefile could not address %s directly; trying filtered delete in parent dir with include=%s", remote_path, include_filter)
+        fallback = await asyncio.create_subprocess_exec(Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG, "delete", remote_dir, "--max-depth", "1", "--include", include_filter, env=rclone_env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         _, fallback_stderr = await fallback.communicate()
         fallback_err = fallback_stderr.decode("utf-8", errors="replace").strip()
         if fallback.returncode != 0:
@@ -1398,10 +1592,7 @@ class PDFArchiver:
         if list_err:
             return False, f"{stderr_text}\nfiltered delete verify: {list_err}".strip()
         if filename in remote_files:
-            return False, (
-                f"{stderr_text}\nfiltered delete returned ok but file still exists "
-                f"(size={remote_files[filename]})"
-            )
+            return False, (f"{stderr_text}\nfiltered delete returned ok but file still exists (size={remote_files[filename]})")
 
         logging.info("filtered delete removed stale remote file: %s/%s", remote_dir, filename)
         return True, f"{stderr_text}\nfiltered delete ok".strip()
@@ -1428,13 +1619,7 @@ class PDFArchiver:
         rclone_env.setdefault("HOME", os.path.expanduser("~"))
         rclone_env["RCLONE_CONFIG"] = Config.RCLONE_CONFIG
 
-        proc = await asyncio.create_subprocess_exec(
-            Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG,
-            "lsjson", remote_path,
-            env=rclone_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        proc = await asyncio.create_subprocess_exec(Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG, "lsjson", remote_path, env=rclone_env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         out, stderr = await proc.communicate()
         stderr_text = stderr.decode("utf-8", errors="replace").strip()
         if proc.returncode != 0:
@@ -1490,13 +1675,7 @@ class PDFArchiver:
         rclone_env.setdefault("HOME", os.path.expanduser("~"))
         rclone_env["RCLONE_CONFIG"] = Config.RCLONE_CONFIG
 
-        proc = await asyncio.create_subprocess_exec(
-            Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG,
-            "lsjson", remote_dir, "--files-only",
-            env=rclone_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        proc = await asyncio.create_subprocess_exec(Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG, "lsjson", remote_dir, "--files-only", env=rclone_env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await proc.communicate()
         stderr_text = stderr.decode("utf-8", errors="replace").strip()
         if proc.returncode != 0:
@@ -1553,11 +1732,7 @@ class PDFArchiver:
                     continue
 
                 remote_full = f"{remote_dir}/{exact_remote_name}"
-                ok, err = await self._rclone_delete_remote(
-                    remote_full,
-                    remote_dir=remote_dir,
-                    filename=exact_remote_name,
-                )
+                ok, err = await self._rclone_delete_remote(remote_full, remote_dir=remote_dir, filename=exact_remote_name)
                 if ok:
                     deleted += 1
                     logging.info("Deleted stale 0-byte remote before upload: %s", remote_full)
@@ -1565,11 +1740,7 @@ class PDFArchiver:
                     logging.error("rclone auth failed while deleting stale 0-byte remote: %s", err[:300])
                     return deleted
                 else:
-                    logging.warning(
-                        "Failed to delete stale 0-byte remote before upload: %s: %s",
-                        remote_full,
-                        err[:300],
-                    )
+                    logging.warning("Failed to delete stale 0-byte remote before upload: %s: %s", remote_full, err[:300])
         return deleted
 
     async def upload_to_onedrive(self) -> list[WorkflowRecord]:
@@ -1594,48 +1765,25 @@ class PDFArchiver:
 
         # 로컬 매핑: relative_path → WorkflowRecord
         local_map: dict[str, WorkflowRecord] = {}
-        for p in self.success_downloads:
-            local_map[str(p["path"].relative_to(self.local_dir))] = p
+        for p in self.success_downloads: local_map[str(p["path"].relative_to(self.local_dir))] = p
 
         files_from_path = None
-        files_from_fp = tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            prefix="pdf_archiver_rclone_files_",
-            suffix=".txt",
-            delete=False,
-        )
+        files_from_fp = tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix="pdf_archiver_rclone_files_", suffix=".txt", delete=False)
         try:
             files_from_path = files_from_fp.name
-            for rel_path in local_map:
-                files_from_fp.write(rel_path + "\n")
+            for rel_path in local_map: files_from_fp.write(rel_path + "\n")
         finally:
             files_from_fp.close()
 
         # --- rclone copy (move 대신 copy 사용 후 수동 검증+삭제가 더 안전함) ---
         try:
-            proc = await asyncio.create_subprocess_exec(
-                Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG,
-                "copy", Config.LOCAL_BUFFER_DIR, Config.RCLONE_REMOTE,
-                "--files-from", files_from_path,
-                "--transfers", str(Config.RCLONE_TRANSFERS),
-                "--checkers", str(Config.RCLONE_CHECKERS),
-                "--no-traverse", "--onedrive-chunk-size", Config.ONEDRIVE_CHUNK_SIZE,
-                "--retries", str(Config.RCLONE_RETRIES),
-                "--low-level-retries", str(Config.RCLONE_LOW_LEVEL_RETRIES),
-                "--onedrive-no-versions",
-                env=rclone_env,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            proc = await asyncio.create_subprocess_exec(Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG, "copy", Config.LOCAL_BUFFER_DIR, Config.RCLONE_REMOTE, "--files-from", files_from_path, "--transfers", str(Config.RCLONE_TRANSFERS), "--checkers", str(Config.RCLONE_CHECKERS), "--no-traverse", "--onedrive-chunk-size", Config.ONEDRIVE_CHUNK_SIZE, "--retries", str(Config.RCLONE_RETRIES), "--low-level-retries", str(Config.RCLONE_LOW_LEVEL_RETRIES), "--onedrive-no-versions", env=rclone_env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
             _, stderr = await proc.communicate()
             stderr_text = stderr.decode("utf-8", errors="replace")
         finally:
             if files_from_path:
-                try:
-                    os.unlink(files_from_path)
-                except OSError:
-                    pass
+                try: os.unlink(files_from_path)
+                except OSError: pass
 
         if proc.returncode != 0 and stderr_text.strip():
             stderr_lines = [line for line in stderr_text.splitlines() if line.strip()]
@@ -1648,205 +1796,122 @@ class PDFArchiver:
         error_paths: list[str] = []
         for line in stderr_text.splitlines():
             if "ERROR" in line:
-                # rclone ERROR format: "YYYY/MM/DD HH:MM:SS ERROR : path/to/file.pdf: ..."
                 m = re.search(r"ERROR\s*:\s*(.+?\.pdf):", line, re.I)
-                if m:
-                    error_paths.append(m.group(1).strip())
+                if m: error_paths.append(m.group(1).strip())
                 elif "Failed to copy" in line or "nameAlreadyExists" in line:
                     m = re.search(r"(?:Failed to copy|nameAlreadyExists).*?:\s+(.+?\.pdf)", line, re.I)
-                    if m:
-                        error_paths.append(m.group(1).strip())
-                
-                # 'nameAlreadyExists'나 'Couldn't delete'가 아닌 실제 에러만 로그에 남김
+                    if m: error_paths.append(m.group(1).strip())
                 if proc.returncode != 0 and not any(k in line for k in ("nameAlreadyExists", "Couldn't delete", "no such file or directory")):
                     logging.error("rclone: %s", line)
 
         unique_errors = list(dict.fromkeys(error_paths))
 
         if self._rclone_is_auth_error(stderr_text):
-            logging.error(
-                "rclone auth failed during batch copy. Skipping verification/repair; local files will be kept for next run."
-            )
+            logging.error("rclone auth failed during batch copy. Skipping verification/repair; local files will be kept for next run.")
             return []
 
-        verified: set[str] = set()  # report_id str
+        verified: set[str] = set()
 
-        # --- rclone exit 0 = 전부 성공 ---
         if proc.returncode == 0:
-            for p in self.success_downloads:
-                verified.add(str(p["report_id"]))
+            for p in self.success_downloads: verified.add(str(p["report_id"]))
             logging.info("Upload OK (%d files).", total)
         else:
             logging.warning("rclone reported errors (code=%d). Starting verification...", proc.returncode)
 
-        # --- 에러 발생 시 또는 nameAlreadyExists: 디렉토리별 배치 lsl 검증 ---
         if (proc.returncode != 0) or unique_errors:
-            # 검증이 필요한 파일 후보: 에러 로그에 찍힌 파일 + 아직 verified 되지 않은 파일
             candidates = list(set(unique_errors + [rel for rel in local_map.keys() if str(local_map[rel]["report_id"]) not in verified]))
-            
             if candidates:
                 dir_groups: dict[str, list[str]] = {}
                 for rel_path in candidates:
                     d = os.path.dirname(rel_path)
                     dir_groups.setdefault(d, []).append(os.path.basename(rel_path))
-
                 logging.info("Verifying %d files in %d dirs...", len(candidates), len(dir_groups))
-
                 for sub_dir, filenames in dir_groups.items():
                     remote_dir = f"{Config.RCLONE_REMOTE}/{sub_dir}"
                     remote_files = await self._rclone_lsl_dir(remote_dir)
-
                     for fname in filenames:
                         rel_path = f"{sub_dir}/{fname}" if sub_dir else fname
                         payload = local_map.get(rel_path)
-                        if not payload:
-                            continue
-                        # lsl 정확한 파일명으로 보정 (따옴표/유니코드 차이 대응)
+                        if not payload: continue
                         exact_remote_name = self._find_remote_filename(fname, remote_files)
-                        if exact_remote_name is None:
-                            # 원격에 해당 파일이 없음 -> skip
-                            continue
+                        if exact_remote_name is None: continue
                         rs = remote_files[exact_remote_name]
                         ls = payload.get("size", 0)
                         if rs and rs > 0 and rs == ls:
                             logging.info("Verification match (size=%d): %s", ls, rel_path)
                             verified.add(str(payload["report_id"]))
                         elif rs is not None and rs != ls:
-                            # 크기 mismatch (rs=0 등) → 삭제+재업 (될때까지 재시도)
-                            # lsl의 정확한 파일명 사용!
                             remote_full = f"{remote_dir}/{exact_remote_name}"
                             lf = os.path.join(Config.LOCAL_BUFFER_DIR, rel_path)
                             if not os.path.exists(lf):
                                 logging.warning("Local file missing for %s, skipping retry", rel_path)
                                 continue
-
                             max_retries = 5
                             retry_delays = [3, 6, 12, 24, 48]
                             success = False
                             last_error = ""
                             auth_failed = False
-
                             for attempt in range(1, max_retries + 1):
-                                logging.warning(
-                                    "Size mismatch (remote=%s local=%s): %s. Retry %d/%d: delete remote and re-upload...",
-                                    rs, ls, rel_path, attempt, max_retries
-                                )
-
-                                # 1) 원격 파일 삭제 (nameAlreadyExists 상태에서도 삭제가 안될 수 있으니 재시도)
+                                logging.warning("Size mismatch (remote=%s local=%s): %s. Retry %d/%d: delete remote and re-upload...", rs, ls, rel_path, attempt, max_retries)
                                 delete_ok = False
                                 for del_attempt in range(3):
-                                    ok, err = await self._rclone_delete_remote(
-                                        remote_full,
-                                        remote_dir=remote_dir,
-                                        filename=exact_remote_name,
-                                    )
+                                    ok, err = await self._rclone_delete_remote(remote_full, remote_dir=remote_dir, filename=exact_remote_name)
                                     if self._rclone_is_auth_error(err):
                                         auth_failed = True
                                         last_error = f"delete auth failed: {err[:200]}"
-                                        logging.error(
-                                            "rclone auth failed while deleting %s. Stop retrying this file; local file will be kept.",
-                                            rel_path,
-                                        )
+                                        logging.error("rclone auth failed while deleting %s. Stop retrying this file; local file will be kept.", rel_path)
                                         break
                                     if ok:
-                                        # 삭제 명령 성공 → 실제로 삭제됐는지 재확인
-                                        await asyncio.sleep(2)  # 잠시 대기 후 확인
+                                        await asyncio.sleep(2)
                                         after_size, stat_err = await self._rclone_stat_remote(remote_full)
                                         if self._rclone_is_auth_error(stat_err):
                                             auth_failed = True
                                             last_error = f"stat after delete auth failed: {stat_err[:200]}"
-                                            logging.error(
-                                                "rclone auth failed while verifying delete for %s. Stop retrying this file; local file will be kept.",
-                                                rel_path,
-                                            )
+                                            logging.error("rclone auth failed while verifying delete for %s. Stop retrying this file; local file will be kept.", rel_path)
                                             break
                                         if after_size is None:
                                             delete_ok = True
                                             break
-                                        logging.warning(
-                                            "Delete returned ok but file still exists (size=%s) for %s, stderr=%s",
-                                            after_size, rel_path, err
-                                        )
+                                        logging.warning("Delete returned ok but file still exists (size=%s) for %s, stderr=%s", after_size, rel_path, err)
                                     else:
                                         after_size, stat_err = await self._rclone_stat_remote(remote_full)
                                         if self._rclone_is_auth_error(stat_err):
                                             auth_failed = True
                                             last_error = f"stat after failed delete auth failed: {stat_err[:200]}"
-                                            logging.error(
-                                                "rclone auth failed while checking failed delete for %s. Stop retrying this file; local file will be kept.",
-                                                rel_path,
-                                            )
+                                            logging.error("rclone auth failed while checking failed delete for %s. Stop retrying this file; local file will be kept.", rel_path)
                                             break
                                         if after_size is None and not stat_err:
                                             delete_ok = True
                                             logging.info("Remote already absent after failed delete command: %s", rel_path)
                                             break
-                                        logging.warning(
-                                            "Delete attempt %d/3 failed for %s: %s",
-                                            del_attempt + 1, rel_path, err or "(no stderr)"
-                                        )
+                                        logging.warning("Delete attempt %d/3 failed for %s: %s", del_attempt + 1, rel_path, err or "(no stderr)")
                                     await asyncio.sleep(2 ** del_attempt)
-                                if auth_failed:
-                                    break
-
+                                if auth_failed: break
                                 if not delete_ok:
                                     last_error = "delete failed after 3 attempts (file still on remote)"
-                                    logging.warning(
-                                        "Delete ultimately failed for %s. Skip copyto until the remote file is actually gone.",
-                                        rel_path,
-                                    )
+                                    logging.warning("Delete ultimately failed for %s. Skip copyto until the remote file is actually gone.", rel_path)
                                     await asyncio.sleep(retry_delays[attempt - 1] if attempt <= len(retry_delays) else 60)
                                     continue
-
-                                # 2) 대기 (OneDrive 락/삭제 전파 대기)
                                 await asyncio.sleep(retry_delays[attempt - 1] if attempt <= len(retry_delays) else 60)
-
-                                # 3) 개별 재업로드 시도 (--ignore-existing 절대 사용 금지!
-                                #    0바이트 파일이 존재하면 업로드를 skip 해버림)
-                                rp = await asyncio.create_subprocess_exec(
-                                    Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG,
-                                    "copyto", lf, remote_full,
-                                    "--onedrive-chunk-size", Config.ONEDRIVE_CHUNK_SIZE,
-                                    "--retries", str(max(Config.RCLONE_RETRIES, 5)),
-                                    "--low-level-retries", str(Config.RCLONE_LOW_LEVEL_RETRIES),
-                                    "--onedrive-no-versions",
-                                    env=rclone_env,
-                                    stdout=asyncio.subprocess.DEVNULL,
-                                    stderr=asyncio.subprocess.PIPE,
-                                )
+                                rp = await asyncio.create_subprocess_exec(Config.RCLONE_BIN, "--config", Config.RCLONE_CONFIG, "copyto", lf, remote_full, "--onedrive-chunk-size", Config.ONEDRIVE_CHUNK_SIZE, "--retries", str(max(Config.RCLONE_RETRIES, 5)), "--low-level-retries", str(Config.RCLONE_LOW_LEVEL_RETRIES), "--onedrive-no-versions", env=rclone_env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
                                 _, rp_stderr = await rp.communicate()
                                 rp_stderr_text = rp_stderr.decode("utf-8", errors="replace")
-
-                                # returncode=0 이어도 stderr에 nameAlreadyExists 같은 에러가 있을 수 있음
                                 upload_ok = rp.returncode == 0
                                 if rp.returncode != 0 or "nameAlreadyExists" in rp_stderr_text or "ERROR" in rp_stderr_text:
                                     upload_ok = False
                                     last_error = f"copyto: {rp_stderr_text.strip()[:200]}"
-                                    logging.warning(
-                                        "Retry %d copyto problem for %s (rc=%d): %s",
-                                        attempt, rel_path, rp.returncode, last_error
-                                    )
+                                    logging.warning("Retry %d copyto problem for %s (rc=%d): %s", attempt, rel_path, rp.returncode, last_error)
                                     if self._rclone_is_auth_error(rp_stderr_text):
                                         auth_failed = True
-                                        logging.error(
-                                            "rclone auth failed while re-uploading %s. Stop retrying this file; local file will be kept.",
-                                            rel_path,
-                                        )
+                                        logging.error("rclone auth failed while re-uploading %s. Stop retrying this file; local file will be kept.", rel_path)
                                         break
-
-                                if not upload_ok:
-                                    continue
-
-                                # 4) 업로드 성공 시 크기 검증
-                                await asyncio.sleep(1)  # OneDrive 메타데이터 반영 대기
+                                if not upload_ok: continue
+                                await asyncio.sleep(1)
                                 uploaded_size, stat_err = await self._rclone_stat_remote(remote_full)
                                 if self._rclone_is_auth_error(stat_err):
                                     auth_failed = True
                                     last_error = f"stat after upload auth failed: {stat_err[:200]}"
-                                    logging.error(
-                                        "rclone auth failed while verifying upload for %s. Stop retrying this file; local file will be kept.",
-                                        rel_path,
-                                    )
+                                    logging.error("rclone auth failed while verifying upload for %s. Stop retrying this file; local file will be kept.", rel_path)
                                     break
                                 if uploaded_size == ls:
                                     logging.info("Retry %d successful (size=%d): %s", attempt, ls, rel_path)
@@ -1854,20 +1919,15 @@ class PDFArchiver:
                                     success = True
                                     break
                                 elif uploaded_size is not None:
-                                    rs = uploaded_size  # 다음 루프에서 비교할 값 업데이트
+                                    rs = uploaded_size
                                     last_error = f"size mismatch (remote={uploaded_size} local={ls})"
                                     logging.warning("Retry %d %s for %s", attempt, last_error, rel_path)
                                 else:
                                     last_error = "remote file not found after upload"
                                     logging.warning("Retry %d remote empty for %s", attempt, rel_path)
-
                             if not success:
-                                logging.error(
-                                    "Giving up on %s after %d retries. Last error: %s",
-                                    rel_path, attempt if auth_failed else max_retries, last_error
-                                )
+                                logging.error("Giving up on %s after %d retries. Last error: %s", rel_path, attempt if auth_failed else max_retries, last_error)
 
-        # --- 로컬 정리 ---
         deleted = 0
         kept = 0
         for p in self.success_downloads:
@@ -1875,20 +1935,15 @@ class PDFArchiver:
             lp = p["path"]
             if rid in verified:
                 try:
-                    if lp.exists():
-                        os.remove(str(lp))
-                        deleted += 1
-                except OSError as e:
-                    logging.warning("rm fail: %s: %s", lp, e)
-            else:
-                kept += 1
+                    if lp.exists(): os.remove(str(lp))
+                    deleted += 1
+                except OSError as e: logging.warning("rm fail: %s: %s", lp, e)
+            else: kept += 1
 
         for root, dirs, files in os.walk(Config.LOCAL_BUFFER_DIR, topdown=False):
             for d in dirs:
-                try:
-                    os.rmdir(os.path.join(root, d))
-                except OSError:
-                    pass
+                try: os.rmdir(os.path.join(root, d))
+                except OSError: pass
 
         result = [p for p in self.success_downloads if str(p["report_id"]) in verified]
         logging.info("Upload: %d ok, %d kept. (%d dir lsl calls)", len(result), kept, len(dir_groups) if unique_errors else 0)
