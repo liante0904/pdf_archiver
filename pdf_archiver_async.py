@@ -12,6 +12,7 @@ import aiohttp
 import hashlib
 import ssl
 import os
+import signal
 import time
 import logging
 import fcntl
@@ -75,6 +76,7 @@ class Config:
     RCLONE_REMOTE = os.getenv("RCLONE_REMOTE", "onedrive:/archive/pdf")
     RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", os.path.expanduser("~/.config/rclone/rclone.conf"))
     LOCK_FILE = "/tmp/pdf_archiver_async.lock"
+    ZOMBIE_TIMEOUT_SECONDS = int(os.getenv("PDF_ARCHIVER_ZOMBIE_TIMEOUT", "600"))
 
     BATCH_SIZE = 10
     DOWNLOAD_CONCURRENCY = 10
@@ -285,7 +287,14 @@ def _pdf_signature_offset(data: bytes, max_scan=2048):
 
 
 def _is_pdf_payload(data: bytes):
-    return _pdf_signature_offset(data) is not None
+    """%PDF 시그니처 확인. Fasoo DRM 등 암호화 PDF 대응을 위해
+    200KB 이상 파일은 시그니처가 없어도 유효한 PDF로 간주."""
+    if _pdf_signature_offset(data) is not None:
+        return True
+    # DRM-encrypted PDF fallback (Fasoo DRM 등은 %PDF 시그니처가 없음)
+    if len(data) > 200 * 1024:
+        return True
+    return False
 
 
 def _report_prefix(firm, title, report_id, reg_dt=None):
@@ -375,7 +384,7 @@ async def download_ds_pdf(source_url, target_path, title, report_id, firm, reg_d
                 if response.status != 200 or "text/html" in content_type.lower() or len(body) < 5000:
                     return False
 
-                if _pdf_signature_offset(body) is None:
+                if not _is_pdf_payload(body):
                     return False
 
                 tmp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,6 +424,35 @@ def safe_encode_url(url):
         return url
 
 
+def _encode_url_euc_kr(url):
+    """safe_encode_url 의 EUC-KR 버전.
+    iprovest.com(교보증권), myasset.com(유안타증권), imfnsec.com(IM증권) 등
+    EUC-KR percent-encoding 을 기대하는 서버용."""
+    try:
+        current = url
+        prev = None
+        while prev != current:
+            prev = current
+            current = unquote(current)
+        parts = urlparse(current)
+        return urlunparse((
+            parts.scheme, parts.netloc,
+            quote(parts.path, safe='/:@', encoding='euc-kr'),
+            parts.params,
+            quote(parts.query, safe='&=', encoding='euc-kr'),
+            parts.fragment,
+        ))
+    except Exception:
+        return url
+
+
+def _has_korean(text):
+    """문자열에 한글(가-힣)이 포함되어 있는지"""
+    if not text:
+        return False
+    return bool(re.search(r'[가-힣]', text))
+
+
 def _origin_referer(url):
     try:
         parts = urlparse(url)
@@ -423,6 +461,97 @@ def _origin_referer(url):
     except Exception:
         pass
     return url
+
+
+# --- 4개 증권사 wget 쿠키/Referer 처리 (대신증권, IBK투자증권, 삼성증권, 다올투자증권) ---
+_FIRMS_NEEDING_COOKIE_SESSION = {"대신증권", "IBK투자증권", "삼성증권", "다올투자증권"}
+
+def _firm_base_domain(url: str) -> str | None:
+    """URL의 scheme + netloc (도메인 루트) 반환"""
+    try:
+        parts = urlparse(url)
+        if parts.scheme and parts.netloc:
+            return f"{parts.scheme}://{parts.netloc}/"
+    except Exception:
+        pass
+    return None
+
+
+def _get_first_url(pdf_url, key_url, tel_url, dw_url, candidates):
+    """우선순위: pdf_url > candidates[0] > key_url > tel_url > dw_url"""
+    for u in (pdf_url,):
+        if u:
+            return u
+    if candidates:
+        return candidates[0]
+    for u in (key_url, tel_url, dw_url):
+        if u:
+            return u
+    return None
+
+
+async def _ensure_session_cookies_aiohttp(firm: str, target_url: str) -> str:
+    """aiohttp 로 해당 증권사 도메인에 방문하여 세션 쿠키 문자열을 획득한다.
+
+    wget --save-cookies 대신 aiohttp로 직접 방문하여 Set-Cookie 헤더를 추출.
+    JSESSIONID 등 세션 쿠키가 설정되면 "key=value; key=value" 형태로 반환.
+
+    대상: 대신증권, IBK투자증권, 삼성증권, 다올투자증권
+    """
+    if firm not in _FIRMS_NEEDING_COOKIE_SESSION:
+        return ""
+
+    domain = _firm_base_domain(target_url)
+    if not domain:
+        return ""
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko,en-US;q=0.9,en;q=0.8",
+        "Referer": domain,
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    }
+
+    # 방문할 URL 목록: 도메인 루트, 경로만(쿼리 제외)
+    visit_urls = [domain]
+    path_only = target_url.split("?")[0] if "?" in target_url else target_url
+    if path_only != domain:
+        visit_urls.append(path_only)
+
+    collected_cookies = {}
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        for visit_url in visit_urls:
+            try:
+                async with session.get(
+                    visit_url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                    allow_redirects=True,
+                ) as resp:
+                    await resp.read()
+                    # Set-Cookie 헤더 추출
+                    for raw_cookie in resp.headers.getall("Set-Cookie", []):
+                        for part in str(raw_cookie).split(","):
+                            cookie_entry = part.split(";", 1)[0].strip()
+                            if "=" in cookie_entry:
+                                key, val = cookie_entry.split("=", 1)
+                                collected_cookies[key.strip()] = val.strip()
+            except Exception:
+                continue
+            if collected_cookies:
+                break
+
+    if not collected_cookies:
+        return ""
+
+    return "; ".join(f"{k}={v}" for k, v in collected_cookies.items())
 
 
 def extract_dbfi_retry_candidates(body_text, base_url):
@@ -540,7 +669,7 @@ async def download_mirae_pdf(candidates, target_path, title, report_id, firm, re
             
             if proc.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 1000:
                 candidate_body = tmp_path.read_bytes()
-                if _pdf_signature_offset(candidate_body) is not None:
+                if _is_pdf_payload(candidate_body):
                     body = candidate_body
                     break
             
@@ -580,7 +709,7 @@ async def download_mirae_pdf(candidates, target_path, title, report_id, firm, re
                     await proc.wait()
                     if proc.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 1000:
                         candidate_body = tmp_path.read_bytes()
-                        if _pdf_signature_offset(candidate_body) is not None:
+                        if _is_pdf_payload(candidate_body):
                             body = candidate_body
             if board_tmp.exists(): board_tmp.unlink()
         except Exception as e:
@@ -870,8 +999,7 @@ async def download_dbfi_pdf(key_url, target_path, title, report_id, firm, reg_dt
             if not tmp_path.exists() or tmp_path.stat().st_size <= 1024:
                 return False
             body = tmp_path.read_bytes()
-            signature_offset = _pdf_signature_offset(body)
-            if signature_offset is None:
+            if not _is_pdf_payload(body):
                 tmp_path.unlink(missing_ok=True)
                 return False
 
@@ -917,7 +1045,14 @@ def build_candidate_urls(firm, urls):
     seen = set()
     for u in candidates:
         encoded = safe_encode_url(u)
-        for variant in (u, encoded):
+        variants = [u, encoded]
+        # 한글이 포함된 URL은 EUC-KR percent-encoding variant 도 추가
+        # (교보증권/iprovest, 유안타증권/myasset, IM증권/imfnsec 등 대응)
+        if _has_korean(u):
+            euc_encoded = _encode_url_euc_kr(u)
+            if euc_encoded and euc_encoded not in variants:
+                variants.append(euc_encoded)
+        for variant in variants:
             if variant not in seen:
                 seen.add(variant)
                 final.append(variant)
@@ -981,6 +1116,19 @@ class PDFArchiver:
             "size": size, "pages": pages, "pdf_hash": pdf_hash,
         }))
 
+    async def _try_await_record_download(self, row_meta, target_path, coro):
+        """비동기 다운로드 래퍼: await coro → 성공 시 success_downloads 에 기록하고 True."""
+        result = await coro
+        if result:
+            row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt = row_meta
+            self._add_success_record(
+                row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url,
+                firm, title, reg_dt, target_path,
+                result["size"], result["pages"], result.get("pdf_hash"),
+            )
+            return True
+        return False
+
     def _make_file_path(self, firm, title, reg_dt, report_id):
         clean_dt = re.sub(r'[^0-9]', '', str(reg_dt)) if reg_dt else "00000000"
         y_m = f"{clean_dt[:4]}-{clean_dt[4:6]}"
@@ -994,6 +1142,7 @@ class PDFArchiver:
     async def download_task(self, row):
         # row: (id, report_id, sec_firm_order, key, pdf_url, telegram_url, download_url, firm, title, reg_dt)
         row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt = row
+        row_meta = (row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt)
         raw_urls = _download_sources_for_firm(key_url, pdf_url, tel_url, dw_url)
         candidates = build_candidate_urls(firm, raw_urls)
         
@@ -1012,62 +1161,80 @@ class PDFArchiver:
                 if not dbfi_source_url and tel_url and "/appData/descRsh/" in str(tel_url):
                     dbfi_source_url = tel_url
                 async with self.dbfi_semaphore:
-                    dbfi_result = await download_dbfi_pdf(dbfi_source_url, target_path, title, report_id, firm, reg_dt)
+                    ok = await self._try_await_record_download(
+                        row_meta, target_path,
+                        download_dbfi_pdf(dbfi_source_url, target_path, title, report_id, firm, reg_dt),
+                    )
                     if Config.DBFI_REQUEST_DELAY_SECONDS > 0:
                         await asyncio.sleep(Config.DBFI_REQUEST_DELAY_SECONDS)
-                if dbfi_result:
-                    self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, dbfi_result["size"], dbfi_result["pages"], dbfi_result.get("pdf_hash"))
-                    ok = True
 
             # 2. 미래에셋증권 특수 처리
             if not ok and firm == "미래에셋증권":
-                # Mirae는 전달받은 모든 후보 URL들과 게시판 검색 결과를 병합하여 시도함
-                mirae_result = await download_mirae_pdf(candidates, target_path, title, report_id, firm, reg_dt)
-                if mirae_result:
-                    self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, mirae_result["size"], mirae_result["pages"], mirae_result.get("pdf_hash"))
-                    ok = True
+                ok = await self._try_await_record_download(
+                    row_meta, target_path,
+                    download_mirae_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                )
 
             # 3. DS투자증권 특수 처리
             if not ok and firm == "DS투자증권":
                 for url in candidates:
-                    ds_result = await download_ds_pdf(url, target_path, title, report_id, firm, reg_dt)
-                    if ds_result:
-                        self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, ds_result["size"], ds_result["pages"], ds_result.get("pdf_hash"))
-                        ok = True
+                    ok = await self._try_await_record_download(
+                        row_meta, target_path,
+                        download_ds_pdf(url, target_path, title, report_id, firm, reg_dt),
+                    )
+                    if ok:
                         break
 
 
             # LS증권 특수 처리 (View.jsp 2-step 파싱)
             if not ok and "LS" in firm:
-                ls_result = await download_ls_pdf(candidates, target_path, title, report_id, firm, reg_dt)
-                if ls_result:
-                    self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, ls_result["size"], ls_result["pages"], ls_result.get("pdf_hash"))
-                    ok = True
-            # 4. 일반 다운로드 (wget)
+                ok = await self._try_await_record_download(
+                    row_meta, target_path,
+                    download_ls_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                )
+            # 4. 일반 다운로드 (wget) — 4개 증권사(대신/IBK/삼성/다올)는 쿠키+Referer 처리
             if not ok and firm not in ("미래에셋증권", "DS투자증권") and sec_firm_order != Config.DBFI_FIRM_ORDER:
+                # 4a. aiohttp로 세션 쿠키 사전 획득
+                cookie_string = ""
+                if firm in _FIRMS_NEEDING_COOKIE_SESSION:
+                    first_url = _get_first_url(pdf_url, key_url, tel_url, dw_url, candidates)
+                    if first_url:
+                        cookie_string = await _ensure_session_cookies_aiohttp(firm, first_url)
+                        if cookie_string:
+                            logging.info(
+                                "%s session cookies acquired: %s",
+                                _report_prefix(firm, title, report_id, reg_dt),
+                                cookie_string,
+                            )
+
                 for url in candidates:
-                    # 대신증권 등 일부 사이트는 레퍼러와 유저에이전트에 민감함
-                    referer = _origin_referer(pdf_url or key_url or url)
+                    # 4b. wget 명령어 구성
+                    # 4개 대상 증권사는 Referer를 다운로드 URL 자체로 설정 (서블릿/Referer 검증 대응)
+                    if firm in _FIRMS_NEEDING_COOKIE_SESSION:
+                        referer = pdf_url or key_url or url
+                    else:
+                        referer = _origin_referer(pdf_url or key_url or url)
                     cmd = [
                         "wget", "-q", "-O", str(tmp_path),
                         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                         "--referer=" + referer,
                         "--timeout=30", "--tries=2",
                         "--no-check-certificate",
-                        url,
                     ]
+                    if cookie_string:
+                        cmd.insert(1, "--header=Cookie: " + cookie_string)
+                    cmd.append(url)
+
                     if use_proxy:
-                        # wget은 환경변수나 별도 설정을 통해 프록시를 사용함
-                        # 여기서는 단순화를 위해 wget 직접 호출
                         os.environ["all_proxy"] = f"socks5h://{proxy_url}"
-                    
+
                     try:
                         proc = await asyncio.create_subprocess_exec(*cmd, env=os.environ)
                         await proc.wait()
-                        
+
                         if proc.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 1024:
                             body = tmp_path.read_bytes()
-                            if _pdf_signature_offset(body) is not None:
+                            if _is_pdf_payload(body):
                                 if target_path.exists(): target_path.unlink()
                                 tmp_path.rename(target_path)
                                 pages = await get_pdf_page_count(target_path)
@@ -1904,16 +2071,95 @@ class PDFArchiver:
         finally:
             await DBManager.close()
 
+def _get_process_elapsed(pid: int) -> float | None:
+    """Return elapsed seconds since process started, or None if undetermined."""
+    try:
+        with open(f"/proc/{pid}/stat", "r") as f:
+            stat = f.read()
+        # find end of comm field (enclosed in parens, may contain spaces)
+        comm_end = stat.rfind(")")
+        fields = stat[comm_end + 2:].split()
+        starttime_ticks = int(fields[19])               # field 19 = starttime
+        with open("/proc/uptime", "r") as f:
+            uptime_sec = float(f.read().split()[0])
+        clk_tck = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+        return uptime_sec - (starttime_ticks / clk_tck)
+    except Exception:
+        return None
+
+
+def _acquire_lock(lock_path: str, timeout: int) -> tuple[bool, object | None]:
+    """Try to acquire a fcntl advisory lock.
+
+    Returns (True, file_handle) on success.
+    If the lock is held by a zombie (elapsed > *timeout* seconds), kill it
+    and re-acquire.  Otherwise returns (False, None).
+    """
+    # attempt without truncating so we can read the old PID on failure
+    try:
+        lock_f = open(lock_path, "r+")
+    except FileNotFoundError:
+        lock_f = open(lock_path, "w+")
+
+    try:
+        fcntl.lockf(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # success — stamp our PID
+        lock_f.seek(0)
+        lock_f.truncate()
+        lock_f.write(str(os.getpid()))
+        lock_f.flush()
+        return True, lock_f
+    except (IOError, OSError):
+        # lock held by another process
+        lock_f.seek(0)
+        old_pid_str = lock_f.read().strip()
+        lock_f.close()
+
+        if not old_pid_str:
+            return False, None
+
+        try:
+            old_pid = int(old_pid_str)
+        except ValueError:
+            return False, None
+
+        elapsed = _get_process_elapsed(old_pid)
+        if elapsed is None or elapsed <= timeout:
+            if elapsed is not None:
+                print(f"DEBUG: 다른 인스턴스 실행 중 (PID={old_pid}, 경과={elapsed:.0f}초 < {timeout}초). 종료합니다.")
+            return False, None
+
+        # zombie detected — kill and retry
+        print(f"DEBUG: 좀비 프로세스 발견 (PID={old_pid}, 실행시간={elapsed:.0f}초 > {timeout}초). SIGKILL 전송.")
+        try:
+            os.kill(old_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        time.sleep(1)
+
+        # retry lock acquisition
+        lock_f = open(lock_path, "w")
+        try:
+            fcntl.lockf(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_f.write(str(os.getpid()))
+            lock_f.flush()
+            print(f"DEBUG: 좀비 종료 후 락 획득 성공 (PID={os.getpid()}).")
+            return True, lock_f
+        except (IOError, OSError):
+            lock_f.close()
+            print(f"DEBUG: 좀비 종료했으나 락 획득 실패. 종료합니다.")
+            return False, None
+
+
 if __name__ == "__main__":
     if "--fetch-only" in sys.argv:
         Config.FETCH_ONLY = True
 
-    lock_f = open(Config.LOCK_FILE, "w")
-    try:
-        fcntl.lockf(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        asyncio.run(PDFArchiver().run())
-    except (IOError, OSError):
+    ok, lock_f = _acquire_lock(Config.LOCK_FILE, Config.ZOMBIE_TIMEOUT_SECONDS)
+    if not ok:
         sys.exit(0)
+    try:
+        asyncio.run(PDFArchiver().run())
     finally:
         try:
             lock_f.close()
