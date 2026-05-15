@@ -734,7 +734,7 @@ async def download_mirae_pdf(candidates, target_path, title, report_id, firm, re
         "pdf_hash": _pdf_hash_bytes(body),
     }
 
-async def download_kb_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+async def download_kyobo_pdf(candidates, target_path, title, report_id, firm, reg_dt):
     """교보증권 (iprovest.com) 전용 다운로드.
     게시판 뷰 페이지(board.php)에 접속하여 실제 PDF 다운로드 URL을 추출한 후 다운로드한다.
     """
@@ -1394,7 +1394,7 @@ class PDFArchiver:
             if not ok and firm == "교보증권":
                 ok = await self._try_await_record_download(
                     row_meta, target_path,
-                    download_kb_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                    download_kyobo_pdf(candidates, target_path, title, report_id, firm, reg_dt),
                 )
 
             # 3c. 하나증권 특수 처리 (게시판에서 유효한 다운로드 URL 재추출)
@@ -1726,10 +1726,8 @@ class PDFArchiver:
 
             for fname in filenames:
                 exact_remote_name = self._find_remote_filename(fname, remote_files)
-                if exact_remote_name is None:
-                    continue
-                if remote_files[exact_remote_name] != 0:
-                    continue
+                if exact_remote_name is None: continue
+                if remote_files[exact_remote_name] != 0: continue
 
                 remote_full = f"{remote_dir}/{exact_remote_name}"
                 ok, err = await self._rclone_delete_remote(remote_full, remote_dir=remote_dir, filename=exact_remote_name)
