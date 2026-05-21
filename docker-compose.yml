@@ -13,6 +13,8 @@ services:
       - WORKSPACE_SECRET_FILE=/secrets/pdf_archiver/.json
       - SOURCE_REPORTS_TABLE_NAME=${SOURCE_REPORTS_TABLE_NAME:-tbl_sec_reports}
       - PDF_ARCHIVE_TABLE_NAME=${PDF_ARCHIVE_TABLE_NAME:-tbl_sec_reports_pdf_archive}
+    extra_hosts:
+      - "cloudflare-warp:host-gateway"
     volumes:
       # 워크스페이스별 비밀값 JSON
       - /home/ubuntu/secrets/pdf_archiver:/secrets/pdf_archiver:ro
