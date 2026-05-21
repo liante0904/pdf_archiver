@@ -864,8 +864,32 @@ async def download_hana_pdf(candidates, target_path, title, report_id, firm, reg
         try:
             headers = _browser_like_headers()
             async with session.get(board_url, headers=headers, allow_redirects=True) as resp:
-                board_html = await resp.text()
+                raw_body = await resp.read()
+                content_type = resp.headers.get("content-type", "").lower()
                 cookies = _cookie_header_from_response(resp)
+
+            # 만약 board_url 자체가 바로 PDF를 반환했다면 (UnicodeDecodeError 방지)
+            if "application/pdf" in content_type or _is_pdf_payload(raw_body):
+                tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path.write_bytes(raw_body)
+                if target_path.exists():
+                    target_path.unlink()
+                tmp_path.rename(target_path)
+                pages = await get_pdf_page_count(target_path)
+                return {
+                    "report_id": report_id, "firm": firm, "title": title, "path": target_path,
+                    "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+                    "pdf_hash": _pdf_hash_bytes(raw_body),
+                }
+
+            # HTML인 경우 디코딩하여 게시판 파싱 진행
+            try:
+                board_html = raw_body.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    board_html = raw_body.decode("euc-kr")
+                except UnicodeDecodeError:
+                    board_html = raw_body.decode("utf-8", errors="ignore")
 
             # 2. board_html 에서 실제 PDF 다운로드 URL 추출
             pdf_url = None
