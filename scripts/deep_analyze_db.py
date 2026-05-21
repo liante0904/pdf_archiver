@@ -1,3 +1,12 @@
+"""
+DB 심층 분석 스크립트
+
+이 스크립트는 DB의 전반적인 상태를 심층적으로 분석합니다:
+1. 전체 레코드 수 및 sync_status별 분포 확인
+2. ARCHIVE_STATUS 및 DOWNLOAD_STATUS_YN 상태별 분포 확인
+3. sync_status=1(완료) 임에도 ARCHIVE_PATH가 없는 불일치 사례 탐색
+4. PDF URL은 있으나 아카이브 테이블에 등록되지 않은 레코드 수 확인
+"""
 import asyncio
 import asyncpg
 import os

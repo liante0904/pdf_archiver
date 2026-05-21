@@ -1,3 +1,12 @@
+"""
+PDF 파일명 중복 관리 및 정리 도구
+
+이 스크립트는 OneDrive 상의 파일명 규칙을 기반으로 중복을 찾아 정리합니다:
+1. 동일한 report_id를 가진 여러 파일이 존재할 경우, 점수 시스템(score_filename)을 통해 가장 표준에 가까운 파일명을 선택합니다.
+2. 나머지 비표준 파일명이나 중복된 파일들은 삭제 대상으로 분류합니다.
+3. --execute 옵션을 주지 않으면 Dry-run 모드로 동작하며, --execute 옵션을 주면 실제 원격지 파일을 삭제합니다.
+4. --all 옵션을 통해 전체 월별 폴더를 대상으로 수행하거나, 특정 월 폴더를 지정하여 수행할 수 있습니다.
+"""
 import subprocess
 import re
 import os
@@ -18,7 +27,7 @@ def get_remote_files(target_subfolder):
     """지정된 하위 폴더에서 파일 목록을 가져와 NFC로 정규화합니다."""
     remote_path = f"{BASE_REMOTE_DIR}/{target_subfolder}"
     print(f"\n[INFO] {remote_path} 조사 중... 잠시만 기다려 주세요.")
-    cmd = ["rclone", "lsf", "-R", "--files-only", remote_path]
+    cmd = ["rclone", "lsf", "-R", "--fast-list", "--files-only", remote_path]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"오류 발생: {result.stderr}")

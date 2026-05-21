@@ -1,3 +1,13 @@
+"""
+로컬 PDF 파일 일괄 정리 및 OneDrive 업로드 도구
+
+이 스크립트는 로컬에 다운로드된 PDF 파일들을 DB 정보를 바탕으로 이름을 변경하고 OneDrive로 업로드합니다:
+1. ~/downloads 폴더 내의 '숫자.pdf' 형식의 파일들을 찾아 report_id로 인식합니다.
+2. SQLite DB(telegram.db)에서 해당 report_id의 메타데이터(증권사, 제목, 날짜)를 가져옵니다.
+3. 표준 파일명 규칙(YYMMDD_제목_ID.pdf)에 따라 이름을 변경하고 월별/증권사별 폴더 구조로 정리합니다.
+4. rclone을 사용하여 OneDrive로 업로드하며, 업로드 성공 및 파일 크기 검증 후 로컬 파일을 삭제합니다.
+5. 비동기(asyncio) 및 세마포어를 사용하여 병렬 업로드를 수행합니다.
+"""
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
@@ -29,7 +39,7 @@ LOCK_FILE = "/tmp/pdf_local_batch_organizer.lock"
 MAX_CONCURRENCY = 5  # 동시에 실행할 rclone 작업 수 (추후 10으로 확장 가능)
 
 # 로깅 설정
-LOG_FILE = os.path.expanduser("~/log/pdf_local_batch_organizer.log")
+LOG_FILE = os.path.expanduser("~/logs/pdf_local_batch_organizer.log")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -89,24 +99,25 @@ class PDFLocalBatchOrganizer:
                 *check_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             check_out, _ = await check_proc.communicate()
-            
+
+            stderr_text = stderr.decode()
             if check_out:
                 try:
                     file_info = json.loads(check_out.decode())
-                    if file_info and file_info[0].get('Size', 0) > 1024:
+                    if file_info and file_info[0].get('Size', 0) == local_path.stat().st_size:
                         is_uploaded = True
                 except:
                     pass
 
-            if proc.returncode == 0 and is_uploaded:
+            # 업로드 성공 또는 이미 존재(nameAlreadyExists)하는 경우 검증 통과 시 성공 처리
+            if (proc.returncode == 0 or "nameAlreadyExists" in stderr_text) and is_uploaded:
                 logging.info(f"성공 및 검증 완료: {remote_rel_path}")
                 if local_path.exists():
                     local_path.unlink() # 검증 완료 후 삭제
                 return True
             else:
-                logging.error(f"실패 또는 검증 오류: {remote_rel_path} ({stderr.decode().strip()})")
-                return False
-        except Exception as e:
+                logging.error(f"실패 또는 검증 오류: {remote_rel_path} ({stderr_text.strip()})")
+                return False        except Exception as e:
             logging.error(f"업로드 중 예외 발생: {e}")
             return False
 

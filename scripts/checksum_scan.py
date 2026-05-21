@@ -1,3 +1,12 @@
+"""
+체크썸 기반 중복 파일 스캔 스크립트
+
+이 스크립트는 rclone lsf의 체크썸 출력 기능을 사용하여 OneDrive의 파일들을 전수 조사합니다:
+1. 파일의 크기와 해시(SHA-1 등)가 동일한 '내용 중복' 파일을 찾아냅니다.
+2. 중복 파일 중 DB에 존재하는 가장 낮은 ID를 가진 파일을 생존자로 선택하고 나머지는 삭제 대상으로 분류합니다.
+3. DB에 없는 고아 파일도 함께 식별합니다.
+4. 결과는 tests/ 폴더에 저장됩니다.
+"""
 import asyncio
 import asyncpg
 import subprocess
@@ -38,6 +47,7 @@ async def checksum_based_scan():
         # p: path, s: size, h: hash
         cmd = [
             "rclone", "lsf", "-R", 
+            "--fast-list",
             "--include", "LS증권/**", 
             "--include", "이베스트투자증권/**", 
             "--format", "psh",

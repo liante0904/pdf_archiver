@@ -56,7 +56,7 @@ async def surgical_monthly_scan():
         remote_path = f"onedrive:/archive/pdf/{month}"
         
         # LS증권과 이베스트투자증권 폴더만 가져오기
-        cmd = ["rclone", "lsf", "-R", "--include", "LS증권/**", "--include", "이베스트투자증권/**", "--files-only", remote_path]
+        cmd = ["rclone", "lsf", "-R", "--fast-list", "--include", "LS증권/**", "--include", "이베스트투자증권/**", "--files-only", remote_path]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         
         if proc.returncode != 0: continue # 폴더가 없거나 에러 시 스킵

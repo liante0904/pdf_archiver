@@ -1,3 +1,10 @@
+"""
+고속 고아 파일 탐색 스크립트 (V3)
+
+이 스크립트는 rclone lsf의 결과를 스트리밍 방식으로 처리하여 메모리 사용량을 최소화하면서
+DB에 존재하지 않는 OneDrive 파일(고아 파일)을 빠르게 찾아냅니다.
+주로 LS증권/이베스트투자증권 폴더를 대상으로 합니다.
+"""
 import asyncio
 import asyncpg
 import subprocess
@@ -21,6 +28,7 @@ async def find_orphans_high_speed():
     print("[2/3] OneDrive 스캔 시작 (LS/이베스트 폴더만 타겟팅)...")
     rclone_cmd = [
         "rclone", "lsf", "-R", 
+        "--fast-list",  # 목록 조회 속도 최적화
         "--include", "*/LS증권/**", 
         "--include", "*/이베스트투자증권/**", 
         "--files-only", 

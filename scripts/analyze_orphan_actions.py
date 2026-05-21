@@ -33,7 +33,7 @@ async def analyze_orphan_actions():
     await conn.close()
 
     print("[2/3] OneDrive 파일 목록 재스캔 중...")
-    rclone_cmd = ["rclone", "lsf", "-R", "--include", "*/LS증권/**", "--include", "*/이베스트투자증권/**", "--files-only", "onedrive:/archive/pdf"]
+    rclone_cmd = ["rclone", "lsf", "-R", "--fast-list", "--include", "*/LS증권/**", "--include", "*/이베스트투자증권/**", "--files-only", "onedrive:/archive/pdf"]
     proc = subprocess.run(rclone_cmd, capture_output=True, text=True)
     all_files = [unicodedata.normalize('NFC', f) for f in proc.stdout.splitlines()]
     

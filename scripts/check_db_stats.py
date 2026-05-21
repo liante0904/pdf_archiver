@@ -1,3 +1,11 @@
+"""
+DB 통계 확인 스크립트
+
+이 스크립트는 다음 정보를 출력합니다:
+1. LS증권/이베스트투자증권 관련 메인 테이블(tbl_sec_reports) 레코드 총수
+2. LS증권/이베스트투자증권 관련 아카이브 테이블(tbl_sec_reports_pdf_archive) 레코드 총수
+3. 메인 테이블에는 없지만 아카이브 테이블에만 존재하는 '고아' 메타데이터 수
+"""
 import asyncio
 import asyncpg
 

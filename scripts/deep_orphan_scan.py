@@ -1,3 +1,12 @@
+"""
+OneDrive 고아 파일 정밀 스캔 스크립트
+
+이 스크립트는 OneDrive의 LS증권/이베스트투자증권 폴더를 전수 조사하여 다음을 수행합니다:
+1. DB 레코드와 대조하여 ID가 존재하지 않는 파일을 식별합니다.
+2. ID는 없으나 동일한 제목/날짜를 가진 다른 ID의 레코드가 DB에 있는 경우 '확실한 가비지'로 분류합니다.
+3. DB에 아예 흔적이 없는 파일은 '완전 고아'로 분류합니다.
+4. 결과는 tests/ 폴더에 텍스트 파일로 저장됩니다.
+"""
 import asyncio
 import asyncpg
 import subprocess
@@ -35,6 +44,7 @@ async def deep_orphan_scan():
     print("[2/3] OneDrive 스캔 시작 (LS/이베스트 타겟팅)...")
     rclone_cmd = [
         "rclone", "lsf", "-R", 
+        "--fast-list",
         "--include", "*/LS증권/**", 
         "--include", "*/이베스트투자증권/**", 
         "--files-only", 

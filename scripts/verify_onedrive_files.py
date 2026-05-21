@@ -1,3 +1,10 @@
+"""
+리포트 아카이브 상태 검증 스크립트
+
+지정된 report_id들에 대해 DB 내 아카이브 상태를 확인합니다:
+1. 아카이브 메타데이터 테이블(tbl_sec_reports_pdf_archive)에 등록되어 있는지 확인하고 경로를 출력합니다.
+2. 메타데이터에 없으면 메인 테이블(tbl_sec_reports)에 존재하는지 확인하여 '대기 중'인지 '누락'인지 판별합니다.
+"""
 import asyncio
 import os
 import asyncpg
