@@ -310,7 +310,7 @@ class TestDbfiDownload(unittest.IsolatedAsyncioTestCase):
 
             with patch.object(archiver.aiohttp, "ClientSession", return_value=fake_session), patch.object(
                 archiver.aiohttp, "TCPConnector", return_value=None
-            ), patch.object(archiver, "get_pdf_page_count", new=AsyncMock(return_value=9)):
+            ), patch("downloaders.dbfi.get_pdf_page_count", new=AsyncMock(return_value=9)):
                 result = await archiver.download_dbfi_pdf(
                     detail_url,
                     target_path,
@@ -403,7 +403,7 @@ class TestDbfiDownload(unittest.IsolatedAsyncioTestCase):
 
             with patch.object(archiver.aiohttp, "ClientSession", return_value=fake_session), patch.object(
                 archiver.aiohttp, "TCPConnector", return_value=None
-            ), patch.object(archiver, "get_pdf_page_count", new=AsyncMock(return_value=12)):
+            ), patch("downloaders.dbfi.get_pdf_page_count", new=AsyncMock(return_value=12)):
                 result = await archiver.download_dbfi_pdf(
                     source_url,
                     target_path,
