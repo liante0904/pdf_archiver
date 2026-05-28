@@ -258,7 +258,7 @@ async def backfill_pdf_hash() -> None:
                     conn,
                     ARCHIVE_TABLE,
                     BATCH_SIZE,
-                    "NULLIF(BTRIM(file_path), '')",
+                    "NULLIF(BTRIM(pdf_url), '')",
                 )
                 if not rows:
                     break
