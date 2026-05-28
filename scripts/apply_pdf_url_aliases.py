@@ -114,6 +114,7 @@ async def apply_aliases(input_path: Path, backup_path: Path, execute: bool) -> N
             log("Dry-run only. Re-run with --execute to update archive metadata.")
             return
 
+        skipped = 0
         async with conn.transaction():
             upserts = 0
             for row in candidates:
@@ -193,10 +194,14 @@ async def apply_aliases(input_path: Path, backup_path: Path, execute: bool) -> N
                     canonical_id,
                 )
                 count = int(result.split()[-1])
-                if count != 1:
-                    raise RuntimeError(f"Expected 1 upsert for duplicate_report_id={duplicate_id}, got {result}")
-                upserts += count
-            log(f"Committed archive alias upserts: {upserts}")
+                if count == 1:
+                    upserts += count
+                elif count == 0:
+                    log(f"Skipped duplicate_report_id={duplicate_id} (canonical={canonical_id}): URL mismatch or pdf_sync_status != 2. Check manually.")
+                    skipped += 1
+                else:
+                    raise RuntimeError(f"Unexpected upsert count {count} for duplicate_report_id={duplicate_id}")
+            log(f"Committed archive alias upserts: {upserts}, skipped: {skipped}")
     finally:
         await conn.close()
 
