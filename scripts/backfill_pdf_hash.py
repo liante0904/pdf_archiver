@@ -22,6 +22,11 @@ from typing import Iterable
 import aiohttp
 import asyncpg
 
+try:
+    from aiohttp_socks import ProxyConnector
+except ImportError:
+    ProxyConnector = None
+
 from _bootstrap import build_postgres_dsn
 
 
@@ -246,7 +251,11 @@ async def backfill_pdf_hash() -> None:
 
         cache: dict[str, bytes] = {}
         timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        connector = None
+        warp_proxy = os.getenv("WARP_PROXY")
+        if warp_proxy and ProxyConnector:
+            connector = ProxyConnector.from_url(f"socks5://{warp_proxy}")
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             await _ensure_temp_table(conn)
 
             archive_total = 0
