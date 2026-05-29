@@ -185,9 +185,72 @@ uv run python scripts/delete_pdf_url_duplicate_files.py
 ## 🔁 크론탭 (기존 + 신규)
 
 ```
-# 기존: pdf-archiver 3분마다
-*/3 * * * * ... pdf_archiver_async.py ...
-
-# 신규: 매주 일요일 새벽, dedup plan 갱신 + 검증
-0 3 * * 0 cd ~/workspace/services/pdf-archiver && uv run python scripts/plan_content_dedup.py --include-pdf-url --scan-affected-prefixes >> ~/logs/dedup_plan.log 2>&1
+*/3 * * * * ... pdf_archiver_async.py ...     # v1 (OneDrive, 현행)
+0 * * * * ... backfill_pdf_hash.py ...         # hash 백필
+0 3 * * 0 ... plan_content_dedup ...           # 주간 중복 계획
 ```
+
+---
+
+## 🆕 pdf_archiver_v2.py — 차세대 아카이버
+
+### v1 vs v2
+
+```
+v1 (pdf_archiver_async.py, 3천줄)          v2 (pdf_archiver_v2.py, ~500줄)
+─────────────────────────────────          ─────────────────────────────
+OneDrive 저장                                Google Drive 저장
+중복 그냥 또 업로드                           hash 검사 → canonical 재사용
+증권사별 if-else 인라인                       downloader registry 패턴
+config.py 하드코딩                            env 기반 설정
+```
+
+### v2 핵심 로직
+
+```python
+# 다운로드 → hash 계산 → 중복 검사
+pdf_bytes = download(url)
+pdf_hash = sha256(pdf_bytes)
+
+existing = db.find_by_hash(pdf_hash)
+if existing:
+    # 중복: canonical의 storage_key 참조만 복사, 업로드 스킵
+    db.update_alias(report_id, existing.storage_key, pdf_hash)
+else:
+    # 신규: rclone 업로드
+    path = f"{date}/{firm}/{filename}.pdf"
+    rclone.upload(pdf_bytes, path)
+    db.insert_archive(report_id, path, pdf_hash)
+```
+
+### 중복 레코드 처리 방식
+
+```
+tbl_sec_reports (원본 — 절대 삭제 안 함)
+┌────────────┬──────────┬────────────────────────┐
+│ 231970965  │ LS증권   │ 게시판A (먼저 insert)   │ ← canonical
+│ 231971011  │ LS증권   │ 게시판B (나중 insert)   │ ← duplicate
+└────────────┴──────────┴────────────────────────┘
+
+tbl_sec_reports_pdf_archive (v2 처리 후)
+┌────────────┬─────────────────────────────────┬──────────┐
+│ 231970965  │ gdrive:/.../231970965.pdf       │ abc123   │ ← 실물 파일
+│ 231971011  │ gdrive:/.../231970965.pdf       │ abc123   │ ← 같은거 참조!
+└────────────┴─────────────────────────────────┴──────────┘
+
+→ 두 report_id 모두 원본 유지, PDF는 1개만 저장
+```
+
+### v2 실행 순서
+
+```
+1. tbl_sec_reports 조회 (pdf_sync_status IN (0,3))
+2. downloader registry에서 증권사별 다운로더 선택
+3. PDF 다운로드 → SHA-256 hash
+4. DB에서 hash 검색
+   ├─ 있음 → canonical의 storage_key 참조, archive_status='ARCHIVED'
+   └─ 없음 → rclone GDrive 업로드 → storage_key 저장
+5. tbl_sec_reports.pdf_sync_status 업데이트
+```
+
+### 상태: 🚧 코드 작성 중 (scripts/pdf_archiver_v2.py)
