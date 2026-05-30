@@ -37,7 +37,7 @@ if str(REPO_ROOT) not in sys.path:
 
 SOURCE_TABLE = '"tbl_sec_reports"'
 ARCHIVE_TABLE = '"tbl_sec_reports_pdf_archive"'
-LOCK_FILE = "/tmp/pdf_hash_backfill.lock"
+LOCK_FILE = os.getenv("BACKFILL_LOCK_FILE", "/tmp/pdf_hash_backfill.lock")
 BATCH_SIZE = int(os.getenv("PDF_HASH_BACKFILL_BATCH_SIZE", "500"))
 WORKERS = int(os.getenv("PDF_HASH_BACKFILL_WORKERS", "12"))
 HTTP_TIMEOUT = int(os.getenv("PDF_HASH_HTTP_TIMEOUT", "30"))
@@ -175,20 +175,25 @@ async def _update_from_temp(conn: asyncpg.Connection, table_name: str) -> int:
 
 
 async def _fetch_pending_rows(conn: asyncpg.Connection, table_name: str, limit: int, path_expr: str) -> list[asyncpg.Record]:
-    # WARP 없는 환경에서는 LS증권 URL 접근 불가 → 제외
     skip_firms = os.getenv("BACKFILL_SKIP_FIRMS", "LS증권")
-    skip_clause = ""
-    if skip_firms and table_name == ARCHIVE_TABLE:
-        firms = [f"'{f.strip()}'" for f in skip_firms.split(",") if f.strip()]
-        if firms:
-            skip_clause = f"AND firm_nm NOT IN ({','.join(firms)})"
+    only_firms = os.getenv("BACKFILL_ONLY_FIRMS", "")
+    firm_clause = ""
+    if table_name == ARCHIVE_TABLE:
+        if only_firms:
+            firms = [f"'{f.strip()}'" for f in only_firms.split(",") if f.strip()]
+            if firms:
+                firm_clause = f"AND firm_nm IN ({','.join(firms)})"
+        elif skip_firms:
+            firms = [f"'{f.strip()}'" for f in skip_firms.split(",") if f.strip()]
+            if firms:
+                firm_clause = f"AND firm_nm NOT IN ({','.join(firms)})"
     return await conn.fetch(
         f"""
         SELECT report_id, {path_expr} AS file_path
         FROM {table_name}
         WHERE pdf_hash IS NULL
           AND {path_expr} IS NOT NULL
-          {skip_clause}
+          {firm_clause}
         ORDER BY report_id ASC
         LIMIT $1
         """,
