@@ -27,12 +27,14 @@ try:
 except ImportError:
     ProxyConnector = None
 
-from _bootstrap import build_postgres_dsn
-
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from _bootstrap import build_postgres_dsn
 
 
 SOURCE_TABLE = '"tbl_sec_reports"'
