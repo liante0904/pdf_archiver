@@ -175,12 +175,20 @@ async def _update_from_temp(conn: asyncpg.Connection, table_name: str) -> int:
 
 
 async def _fetch_pending_rows(conn: asyncpg.Connection, table_name: str, limit: int, path_expr: str) -> list[asyncpg.Record]:
+    # WARP 없는 환경에서는 LS증권 URL 접근 불가 → 제외
+    skip_firms = os.getenv("BACKFILL_SKIP_FIRMS", "LS증권")
+    skip_clause = ""
+    if skip_firms and table_name == ARCHIVE_TABLE:
+        firms = [f"'{f.strip()}'" for f in skip_firms.split(",") if f.strip()]
+        if firms:
+            skip_clause = f"AND firm_nm NOT IN ({','.join(firms)})"
     return await conn.fetch(
         f"""
         SELECT report_id, {path_expr} AS file_path
         FROM {table_name}
         WHERE pdf_hash IS NULL
           AND {path_expr} IS NOT NULL
+          {skip_clause}
         ORDER BY report_id ASC
         LIMIT $1
         """,
