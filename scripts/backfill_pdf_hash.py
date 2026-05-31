@@ -115,6 +115,10 @@ async def _get_source_text_column(conn: asyncpg.Connection, preferred_names: Ite
 
 
 async def _hash_http(session: aiohttp.ClientSession, url_text: str) -> bytes | None:
+    # prefer curl via WARP proxy (aiohttp_socks times out on large files)
+    warp_proxy = os.getenv("WARP_PROXY")
+    if warp_proxy:
+        return await _hash_curl(url_text, warp_proxy)
     try:
         async with session.get(url_text, allow_redirects=True) as response:
             if response.status != 200:
@@ -128,13 +132,47 @@ async def _hash_http(session: aiohttp.ClientSession, url_text: str) -> bytes | N
         return None
 
 
+async def _hash_curl(url_text: str, proxy: str) -> bytes | None:
+    """curl --socks5 로 다운로드 → pipe → sha256sum (aiohttp_socks 타임아웃 대응)"""
+    tmp_path = f"/tmp/backfill_hash_{os.getpid()}_{abs(hash(url_text))}.pdf"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "curl", "-s", "--socks5", proxy,
+            "--connect-timeout", "15", "--max-time", "90",
+            "-o", tmp_path, url_text,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        if proc.returncode != 0 or not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1024:
+            return None
+        return _hash_local_sync(tmp_path)
+    except Exception as exc:
+        log(f"skip curl url={url_text} err={exc}")
+        return None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _hash_local_sync(path: str) -> bytes | None:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.digest()
+    except Exception:
+        return None
+
+
 async def _hash_local(path_text: str) -> bytes | None:
     path = Path(path_text)
     if not path.exists() or not path.is_file():
         return None
     try:
-        data = await asyncio.to_thread(path.read_bytes)
-        return hashlib.sha256(data).digest()
+        return await asyncio.to_thread(_hash_local_sync, str(path))
     except Exception as exc:
         log(f"skip file={path_text} err={exc}")
         return None
