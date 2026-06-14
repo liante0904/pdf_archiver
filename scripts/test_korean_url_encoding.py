@@ -248,7 +248,7 @@ async def process_record(conn, rec: dict, dry_run: bool = False) -> dict | None:
     # 모든 URL 필드에서 후보 수집
     all_candidates: list[tuple[str, str]] = []
     seen_urls = set()
-    for field in ("pdf_url", "key", "telegram_url", "download_url"):
+    for field in ("pdf_url", "report_unique_key", "telegram_url", "download_url"):
         url = str(rec.get(field) or "").strip()
         if url and url.startswith("http"):
             candidates = generate_candidate_urls(url)
@@ -324,14 +324,14 @@ async def main():
         # 대상 레코드 조회
         where_clauses = [
             "pdf_sync_status = 3",
-            "(pdf_url ~ '[가-힣]' OR key ~ '[가-힣]' OR telegram_url ~ '[가-힣]' OR download_url ~ '[가-힣]')",
+            "(pdf_url ~ '[가-힣]' OR report_unique_key ~ '[가-힣]' OR telegram_url ~ '[가-힣]' OR download_url ~ '[가-힣]')",
         ]
         if args.firm:
             where_clauses.append(f"firm_nm = '{args.firm}'")
 
         where_sql = " AND ".join(where_clauses)
         query = f"""
-            SELECT report_id, firm_nm, article_title, pdf_url, key, 
+            SELECT report_id, firm_nm, article_title, pdf_url, report_unique_key,
                    telegram_url, download_url, reg_dt
             FROM tbl_sec_reports
             WHERE {where_sql}

@@ -96,7 +96,7 @@ def _page_count(path: Path) -> int:
 # ---- LS증권 다운로드 ----
 
 def _find_msg_url(rec: dict) -> str | None:
-    for k in ("pdf_url", "key", "download_url", "telegram_url"):
+    for k in ("pdf_url", "report_unique_key", "download_url", "telegram_url"):
         v = str(rec.get(k) or "")
         if "msg.ls-sec.co.kr" in v:
             return v
@@ -104,7 +104,7 @@ def _find_msg_url(rec: dict) -> str | None:
 
 
 def _find_view_url(rec: dict) -> str | None:
-    for k in ("key", "pdf_url"):
+    for k in ("report_unique_key", "pdf_url"):
         v = str(rec.get(k) or "")
         if "View.jsp" in v:
             return v
@@ -198,7 +198,7 @@ def _mk_payload(rec: dict, path: Path, body: bytes) -> dict:
         "pdf_url": str(rec.get("pdf_url") or ""),
         "download_url": str(rec.get("download_url") or ""),
         "telegram_url": str(rec.get("telegram_url") or ""),
-        "key": str(rec.get("key") or ""),
+        "report_unique_key": str(rec.get("report_unique_key") or ""),
         "pdf_hash_hex": _pdf_hash_hex(body),
         "file_path": str(path),
         "file_size": len(body),
@@ -316,7 +316,7 @@ def update_db(payloads: list[dict]):
             ) VALUES (
                 {p['report_id']}, {_sq(p['firm_nm'])}, {_sq(p['title'])}, {_sq(p['reg_dt'])}, {_sq(p['pdf_url'])},
                 {_hex2bytea(p['pdf_hash_hex'])}, 'onedrive', {_sq(sk)},
-                {_sq(p['download_url'])}, {_sq(p['telegram_url'])}, {_sq(p['key'])},
+                {_sq(p['download_url'])}, {_sq(p['telegram_url'])}, {_sq(p['report_unique_key'])},
                 'ARCHIVED', {_sq(fn)}, 'Y',
                 {_sq(p['file_path'])}, {p['file_size']}, {p['page_count']},
                 2, NOW(), NOW(), 1
@@ -348,7 +348,7 @@ async def main():
     log.info("=" * 60)
 
     all_rows = _fetch_json("""
-        SELECT report_id, firm_nm, article_title, pdf_url, key, download_url, telegram_url, reg_dt
+        SELECT report_id, firm_nm, article_title, pdf_url, report_unique_key, download_url, telegram_url, reg_dt
         FROM tbl_sec_reports
         WHERE firm_nm LIKE '%LS%' AND pdf_sync_status = 3
         ORDER BY reg_dt DESC

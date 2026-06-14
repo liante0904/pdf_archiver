@@ -22,7 +22,7 @@ async def analyze_pdf_hash_duplicates():
                 r.firm_nm,
                 r.article_title,
                 r.reg_dt,
-                r.key,
+                r.report_unique_key,
                 r.pdf_url,
                 encode(r.pdf_hash, 'hex') AS pdf_hash_hex,
                 r.download_url,
@@ -56,7 +56,7 @@ async def analyze_pdf_hash_duplicates():
                 marker = "KEEP" if item["report_id"] == survivor["report_id"] else "DROP?"
                 print(
                     f"  - {marker} ID={item['report_id']} | reg_dt={item['reg_dt']} | firm={item['firm_nm']} | "
-                    f"key={item['key']} | pdf_url={item['pdf_url']} | download_url={item['download_url']} | telegram_url={item['telegram_url']}"
+                    f"report_unique_key={item['report_unique_key']} | pdf_url={item['pdf_url']} | download_url={item['download_url']} | telegram_url={item['telegram_url']}"
                 )
 
         for row in rows:

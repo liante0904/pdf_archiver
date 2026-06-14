@@ -43,7 +43,7 @@ log = logging.getLogger("pdf_archiver_v2")
 BATCH_SIZE = int(os.getenv("V2_BATCH_SIZE", "20"))
 WORKERS = int(os.getenv("V2_WORKERS", "6"))
 HTTP_TIMEOUT = int(os.getenv("V2_HTTP_TIMEOUT", "45"))
-RCLONE_REMOTE = os.getenv("V2_RCLONE_REMOTE", os.getenv("RCLONE_REMOTE", "onedrive:/archive/pdf"))
+RCLONE_REMOTE = os.getenv("V2_RCLONE_REMOTE", os.getenv("RCLONE_REMOTE", "gdrive:/archive/pdf"))
 RCLONE_BIN = os.getenv("RCLONE_BIN", "rclone")
 RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", os.path.expanduser("~/.config/rclone/rclone.conf"))
 LOCAL_BUFFER = Path(os.getenv("V2_BUFFER_DIR", "/tmp/pdf_archiver_v2"))
@@ -82,19 +82,21 @@ async def db_connect() -> asyncpg.Connection:
 
 
 async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Record]:
-    """pdf_sync_status=0(대기) 또는 3(실패)인 레코드 fetch"""
+    """메인 테이블은 읽기 전용, 상태는 archive 테이블 LEFT JOIN 으로 판단"""
     return await conn.fetch(
         f"""
-        SELECT report_id, sec_firm_order, key, pdf_url, telegram_url, download_url,
-               firm_nm, article_title, reg_dt, retry_count
-        FROM {SOURCE_TABLE}
-        WHERE pdf_sync_status IN (0, 3)
-          AND COALESCE(retry_count, 0) < {DB_RETRY_LIMIT}
-          AND (NULLIF(BTRIM(pdf_url), '') IS NOT NULL
-               OR NULLIF(BTRIM(telegram_url), '') IS NOT NULL
-               OR NULLIF(BTRIM(download_url), '') IS NOT NULL
-               OR NULLIF(BTRIM(key), '') IS NOT NULL)
-        ORDER BY retry_count ASC, reg_dt DESC, report_id ASC
+        SELECT s.report_id, s.sec_firm_order, s.report_unique_key, s.pdf_url, s.telegram_url, s.download_url,
+               s.firm_nm, s.article_title, s.reg_dt,
+               COALESCE(a.retry_count, 0) as retry_count
+        FROM {SOURCE_TABLE} s
+        LEFT JOIN {ARCHIVE_TABLE} a ON s.report_id = a.report_id
+        WHERE COALESCE(a.pdf_sync_status, 0) IN (0, 3)
+          AND COALESCE(a.retry_count, 0) < {DB_RETRY_LIMIT}
+          AND (NULLIF(BTRIM(s.pdf_url), '') IS NOT NULL
+               OR NULLIF(BTRIM(s.telegram_url), '') IS NOT NULL
+               OR NULLIF(BTRIM(s.download_url), '') IS NOT NULL
+               OR NULLIF(BTRIM(s.report_unique_key), '') IS NOT NULL)
+        ORDER BY COALESCE(a.retry_count, 0) ASC, s.reg_dt DESC, s.report_id ASC
         LIMIT $1
         """,
         limit,
@@ -159,20 +161,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
     )
 
 
-async def update_source_status(conn: asyncpg.Connection, report_id: int,
-                               pdf_status: int, retry_delta: int = 0,
-                               pdf_hash_bytes: bytes = None):
-    """tbl_sec_reports 상태 업데이트"""
-    await conn.execute(
-        f"""
-        UPDATE {SOURCE_TABLE}
-        SET pdf_sync_status = $2,
-            retry_count = COALESCE(retry_count, 0) + $3,
-            pdf_hash = COALESCE($4, pdf_hash)
-        WHERE report_id = $1
-        """,
-        report_id, pdf_status, retry_delta, pdf_hash_bytes,
-    )
+# update_source_status 제거됨 — v2는 archive 테이블만 씀 (tbl_sec_reports 읽기 전용)
 
 
 # ── rclone upload ───────────────────────────────────────────
@@ -233,7 +222,7 @@ async def _download_wget(url: str, target_path: Path, timeout: int = 30) -> bool
     return proc.returncode == 0 and target_path.exists() and target_path.stat().st_size > 1024
 
 
-async def _is_pdf(path: Path) -> bool:
+def _is_pdf(path: Path) -> bool:
     """파일이 PDF인지 확인 (매직 바이트 검사)"""
     try:
         header = path.read_bytes()[:5]
@@ -263,10 +252,12 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
         firm = row["firm_nm"] or "UNKNOWN"
         title = row["article_title"] or "untitled"
         reg_dt = row["reg_dt"] or ""
-        pdf_url = row["pdf_url"] or row["key"] or row["telegram_url"] or row["download_url"]
+        pdf_url = row["pdf_url"] or row["report_unique_key"] or row["telegram_url"] or row["download_url"]
 
         if not pdf_url:
-            await update_source_status(conn, report_id, 3, 1)
+            await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
+                                 storage_key="", file_size=0, page_count=0,
+                                 pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
             return False
 
         storage_key = build_storage_key(firm, title, reg_dt, report_id)
@@ -285,11 +276,15 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
 
         if not ok:
             ok = await _download_wget(pdf_url, tmp_path)
+            if not ok:
+                log.warning(f"[{report_id}] wget failed: {pdf_url[:100]}...")
 
         if not ok or not _is_pdf(tmp_path):
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
-            await update_source_status(conn, report_id, 3, 1)
+            await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
+                                 storage_key="", file_size=0, page_count=0,
+                                 pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
             return False
 
         # 2. hash 계산
@@ -303,8 +298,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
             log.info(f"[{report_id}] DUPLICATE → canonical={existing['report_id']} hash={pdf_hash_hex[:16]}...")
             await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
                                  existing["storage_key"], existing["file_size"] or file_size,
-                                 existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True)
-            await update_source_status(conn, report_id, 2, 0, pdf_hash_bytes)
+                                 existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True, retry_delta=0)
             tmp_path.unlink(missing_ok=True)
             return True
 
@@ -314,16 +308,16 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
 
         if uploaded:
             await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
-                                 storage_key, file_size, 0, pdf_hash_hex, pdf_hash_bytes, True)
-            await update_source_status(conn, report_id, 2, 0, pdf_hash_bytes)
+                                 storage_key, file_size, page_count=0,
+                                 pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=True, retry_delta=0)
             local_target.unlink(missing_ok=True)
             log.info(f"[{report_id}] UPLOADED {firm} | {title[:30]}...")
             return True
         else:
             # 업로드 실패 → 파일 보존, 다음 run에서 재시도
             await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
-                                 storage_key, file_size, 0, pdf_hash_hex, pdf_hash_bytes, False)
-            await update_source_status(conn, report_id, 3, 1, pdf_hash_bytes)
+                                 storage_key, file_size, page_count=0,
+                                 pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=False, retry_delta=1)
             log.warning(f"[{report_id}] UPLOAD FAILED {firm} | {title[:30]}...")
             return False
 

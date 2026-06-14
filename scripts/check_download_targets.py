@@ -107,7 +107,7 @@ async def main() -> None:
               NULLIF(BTRIM(pdf_url), '') IS NOT NULL
               OR NULLIF(BTRIM(telegram_url), '') IS NOT NULL
               OR NULLIF(BTRIM(download_url), '') IS NOT NULL
-              OR NULLIF(BTRIM(key), '') IS NOT NULL
+              OR NULLIF(BTRIM(report_unique_key), '') IS NOT NULL
           )
     """
     no_url_sql = f"""
@@ -119,7 +119,7 @@ async def main() -> None:
               NULLIF(BTRIM(pdf_url), '') IS NOT NULL
               OR NULLIF(BTRIM(telegram_url), '') IS NOT NULL
               OR NULLIF(BTRIM(download_url), '') IS NOT NULL
-              OR NULLIF(BTRIM(key), '') IS NOT NULL
+              OR NULLIF(BTRIM(report_unique_key), '') IS NOT NULL
           )
     """
     cnt_has_url = await conn.fetchval(has_url_sql)

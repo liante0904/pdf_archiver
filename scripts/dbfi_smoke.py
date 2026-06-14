@@ -37,7 +37,7 @@ async def fetch_dbfi_row(report_id=None):
     try:
         if report_id:
             sql = """
-                SELECT report_id, sec_firm_order, key, pdf_url, telegram_url,
+                SELECT report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url,
                        download_url, firm_nm, article_title, reg_dt
                 FROM tbl_sec_reports
                 WHERE report_id = $1
@@ -45,11 +45,11 @@ async def fetch_dbfi_row(report_id=None):
             row = await conn.fetchrow(sql, int(report_id))
         else:
             sql = """
-                SELECT report_id, sec_firm_order, key, pdf_url, telegram_url,
+                SELECT report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url,
                        download_url, firm_nm, article_title, reg_dt
                 FROM tbl_sec_reports
                 WHERE sec_firm_order = 19
-                  AND COALESCE(NULLIF(pdf_url, ''), NULLIF(key, ''), NULLIF(telegram_url, ''),
+                  AND COALESCE(NULLIF(pdf_url, ''), NULLIF(report_unique_key, ''), NULLIF(telegram_url, ''),
                                NULLIF(download_url, '')) IS NOT NULL
                 ORDER BY reg_dt DESC
                 LIMIT 1
@@ -69,7 +69,7 @@ async def run_smoke(report_id=None, output_dir=None, keep_file=False):
         return 1
 
     source_url = (
-        _row_get(row, "key")
+        _row_get(row, "report_unique_key")
         or _row_get(row, "pdf_url")
         or _row_get(row, "telegram_url")
         or _row_get(row, "download_url")

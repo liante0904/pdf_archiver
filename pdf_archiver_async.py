@@ -57,7 +57,7 @@ def _row_payload(row):
         "row_id": row[0],
         "report_id": row[1],
         "sec_firm_order": row[2],
-        "key": row[3],
+        "report_unique_key": row[3],
         "pdf_url": row[4],
         "telegram_url": row[5],
         "download_url": row[6],
@@ -72,7 +72,7 @@ class WorkflowRecord(dict):
         "row_id",
         "report_id",
         "sec_firm_order",
-        "key",
+        "report_unique_key",
         "pdf_url",
         "telegram_url",
         "download_url",
@@ -133,7 +133,7 @@ class PDFArchiver(RcloneManager):
     def _add_success_record(self, row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, size, pages, pdf_hash):
         self.success_downloads.append(WorkflowRecord({
             "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
-            "key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
+            "report_unique_key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
             "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
             "size": size, "pages": pages, "pdf_hash": pdf_hash,
         }))
@@ -162,7 +162,7 @@ class PDFArchiver(RcloneManager):
         return self.local_dir / y_m / firm / filename
 
     async def download_task(self, row):
-        # row: (id, report_id, sec_firm_order, key, pdf_url, telegram_url, download_url, firm, title, reg_dt)
+        # row: (id, report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm, title, reg_dt)
         row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt = row
         row_meta = (row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt)
         raw_urls = _download_sources_for_firm(key_url, pdf_url, tel_url, dw_url)
@@ -345,7 +345,7 @@ class PDFArchiver(RcloneManager):
             payload.get("reg_dt"), payload.get("pdf_url"), payload.get("pdf_hash"), payload.get("has_text"),
             payload.get("is_encrypted"), payload.get("storage_backend") or "onedrive",
             storage_key or payload.get("storage_key") or (str(file_path) if file_path else None),
-            payload.get("download_url"), payload.get("telegram_url"), payload.get("key"),
+            payload.get("download_url"), payload.get("telegram_url"), payload.get("report_unique_key"),
             archive_status, file_name, download_status_yn, str(file_path) if file_path else None,
             file_size, page_count, payload.get("last_accessed_at"), pdf_status, None, retry_delta,
         )
@@ -579,14 +579,14 @@ class PDFArchiver(RcloneManager):
         """
         return f"""
             WITH base AS (
-                SELECT report_id, sec_firm_order, key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt,
+                SELECT report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt,
                        {Config.PDF_STATUS_COL} as status,
                        retry_count,
                        CASE
                            WHEN NULLIF(BTRIM(pdf_url), '') IS NOT NULL
                              OR NULLIF(BTRIM(telegram_url), '') IS NOT NULL
                              OR NULLIF(BTRIM(download_url), '') IS NOT NULL
-                             OR NULLIF(BTRIM(key), '') IS NOT NULL
+                             OR NULLIF(BTRIM(report_unique_key), '') IS NOT NULL
                            THEN 1 ELSE 0
                        END AS has_source_url,
                        COALESCE(ENCODE({Config.PDF_HASH_COL}, 'hex'), NULLIF(BTRIM(pdf_url), ''), report_id::TEXT) AS pdf_key
@@ -601,7 +601,7 @@ class PDFArchiver(RcloneManager):
                               NULLIF(BTRIM(pdf_url), '') IS NOT NULL
                               OR NULLIF(BTRIM(telegram_url), '') IS NOT NULL
                               OR NULLIF(BTRIM(download_url), '') IS NOT NULL
-                              OR NULLIF(BTRIM(key), '') IS NOT NULL
+                              OR NULLIF(BTRIM(report_unique_key), '') IS NOT NULL
                           )
                       )
                   )
@@ -625,7 +625,7 @@ class PDFArchiver(RcloneManager):
                        ) AS firm_rank
                 FROM distinct_targets
             )
-            SELECT report_id as row_id, report_id, sec_firm_order, key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt
+            SELECT report_id as row_id, report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt
             FROM ranked_targets
             ORDER BY firm_rank, reg_dt DESC, firm_nm, report_id DESC
             LIMIT {Config.BATCH_SIZE}
