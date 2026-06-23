@@ -35,7 +35,7 @@ class Config:
         or shutil.which("rclone")
         or "/usr/bin/rclone"
     )
-    RCLONE_REMOTE = os.getenv("RCLONE_REMOTE", "onedrive:/archive/pdf")
+    RCLONE_REMOTE = os.getenv("RCLONE_REMOTE", "gdrive:/archive/pdf")
     RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", os.path.expanduser("~/.config/rclone/rclone.conf"))
     LOCK_FILE = "/tmp/pdf_archiver_async.lock"
     ZOMBIE_TIMEOUT_SECONDS = int(os.getenv("PDF_ARCHIVER_ZOMBIE_TIMEOUT", "600"))

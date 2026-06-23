@@ -1,7 +1,7 @@
 # PDF 중복제거 & Google Drive 이전 — 실행 계획
 
-> 마지막 업데이트: 2026-06-06  
-> 2026-06-06 실측 기반으로 현재 상태 갱신. OneDrive 127.6GB 확인, GDrive 무료 불가 판정.
+> 마지막 업데이트: 2026-06-07  
+> 2026-06-07 실측 기반으로 현재 상태 갱신. 202개 원격 디렉토리 스캔을 통해 미검증 694건의 실물 확인 완료.
 
 ---
 
@@ -95,23 +95,23 @@ uv run python scripts/plan_content_dedup.py --include-pdf-url
 uv run python scripts/plan_content_dedup.py --include-pdf-url --scan-affected-prefixes
 ```
 
-### 생성되는 CSV (2026-06-06 재실행 결과)
+### 생성되는 CSV (2026-06-07 재실행 결과)
 
-| 파일 | 5월 6일 | **6월 6일** | 증가율 |
+| 파일 | 5월 6일 | **6월 7일** | 증가율 |
 |------|---------|------------|--------|
-| `db_duplicate_groups.csv` | 8 groups | **2,191 groups** | 274× |
-| `db_alias_updates.csv` | 124 rows | **25,323 rows** | 204× |
+| `db_duplicate_groups.csv` | 8 groups | **2,195 groups** | 274× |
+| `db_alias_updates.csv` | 124 rows | **25,327 rows** | 204× |
 | `pdf_url_duplicate_groups.csv` | 687 groups | **3,777 groups** | 5.5× |
 | `pdf_url_alias_updates.csv` | 720 rows | **3,827 rows** | 5.3× |
 | `pdf_url_remote_scope_prefixes.csv` | 22 prefixes | **202 prefixes** | 9.2× |
-| `pdf_url_remote_delete_candidates.csv` | 26 files | — (스캔 필요) | — |
-| **총 alias 대상** | **844건** | **~29,150건** | **35×** |
+| `pdf_url_remote_delete_candidates.csv` | 26 files | **2,155 files** | 82.8× |
+| **총 alias 대상** | **844건** | **~29,154건** | **35×** |
 
 ### canonical 결정 규칙
 - **Hash 기반**: 같은 `pdf_hash` 그룹 내에서 `min-report-id` 정책 (가장 낮은 report_id) + OneDrive 파일 존재 우선
 - **pdf_url 기반**: 같은 `pdf_url` 그룹 내에서 가장 낮은 `report_id` (pdf_sync_status=2인 것만)
 
-### 상태: ✅ 2026-06-06 재실행 완료 — hash 2,191 groups, 총 29,150건 중복 식별
+### 상태: ✅ 2026-06-07 재실행 완료 — hash 2,195 groups, 총 29,154건 중복 식별 및 원격 2,155개 파일 매칭 검증
 
 ---
 
@@ -138,12 +138,12 @@ uv run python scripts/apply_pdf_url_aliases.py
 | Skip (URL 불일치/pdf_sync≠2) | 3건: `231971011`, `231700518`, `231700511` |
 | Backup | `pdf_url_alias_backup.csv` (25 rows) |
 
-### 처리 대상 구분
+### 처리 대상 구분 (2026-06-07 업데이트)
 | 구분 | 건수 | 검증 | 설명 |
 |------|------|------|------|
-| 검증 완료, 적용 완료 | 22건 | ✅ alias 적용 + OneDrive canonical 확인 | — |
+| 검증 완료, 적용 완료 | 22건 | ✅ alias 적용 + OneDrive canonical 확인 | 기존 22건 적용 완료 |
 | 검증 완료, skip | 3건 | ⚠️ 수동 확인 필요 (현대차증권×2, LS증권×1) | pdf_sync_status 조건 불일치 |
-| 미검증 | 694건 | ❌ canonical_remote_path가 URL이거나 경로 미확인 | 추가 `--scan-affected-prefixes` 필요 |
+| 미검증 694건 스캔 결과 | 2,155건 | ✅ 202개 prefix 실물 파일 대조 검증 성공 | `remote_delete_candidates` 2,155개 확정 |
 
 ---
 
@@ -276,15 +276,15 @@ v2는 이미 hash 기반 중복 방지 + GDrive 업로드 로직이 구현되어
 | 최신 디렉토리 | 2026-06 (21 files) |
 | 최고(最古) 확인 | rclone lsl 전체 스캔 필요 |
 
-### 생성된 Plan CSV (`tmp/dedup_plan/`) — 2026-06-06 기준
+### 생성된 Plan CSV (`tmp/dedup_plan/`) — 2026-06-07 기준
 
 | 파일 | 건수 |
 |------|------|
-| `db_duplicate_groups.csv` | **2,191 groups** (hash 기반) |
-| `db_alias_updates.csv` | **25,323 rows** |
+| `db_duplicate_groups.csv` | **2,195 groups** (hash 기반) |
+| `db_alias_updates.csv` | **25,327 rows** |
 | `pdf_url_duplicate_groups.csv` | **3,777 groups** |
 | `pdf_url_alias_updates.csv` | **3,827 rows** |
-| `pdf_url_remote_delete_candidates.csv` | 26 files (5월 검증분, 재스캔 필요) |
+| `pdf_url_remote_delete_candidates.csv` | **2,155 files** (실물 검증 완료) |
 | `pdf_url_alias_backup.csv` | 25 rows (Phase 2a 백업) |
 
 ### 누락된 것

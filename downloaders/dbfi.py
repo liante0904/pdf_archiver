@@ -1,4 +1,5 @@
 import asyncio
+import os
 import aiohttp
 import ssl
 import re
@@ -6,6 +7,13 @@ import logging
 from urllib.parse import quote, unquote, urljoin
 import utils
 from utils import _is_pdf_payload, _pdf_hash_bytes, get_pdf_page_count, _report_prefix, _truncate
+
+try:
+    from aiohttp_socks import ProxyConnector
+    WARP_AVAILABLE = True
+except ImportError:
+    ProxyConnector = None
+    WARP_AVAILABLE = False
 
 async def extract_dbfi_pdf_meta(session, encoded_url):
     if not encoded_url:
@@ -50,14 +58,41 @@ async def extract_dbfi_pdf_meta(session, encoded_url):
             return {"viewer_url": "https://whub.dbsec.co.kr/pv/viewer", "doc_id": doc_id, "pdf_url": pdf_url}
     except Exception: return None
 
-async def download_dbfi_pdf(key_url, target_path, title, report_id, firm, reg_dt):
+async def download_dbfi_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+    # candidates에서 최적 URL 선택: appData > pv/gate > streamdocs
+    key_url = None
+    for u in (candidates or []):
+        u_str = str(u) if u else ''
+        if '/appData/descRsh/' in u_str:
+            key_url = u_str
+            break
+    if not key_url:
+        for u in (candidates or []):
+            u_str = str(u) if u else ''
+            if '/pv/gate?q=' in u_str:
+                key_url = u_str
+                break
+    if not key_url:
+        for u in (candidates or []):
+            u_str = str(u) if u else ''
+            if '/streamdocs/v4/documents/' in u_str:
+                key_url = u_str
+                break
+    if not key_url and candidates:
+        key_url = str(candidates[0]) if candidates[0] else None
     if not key_url: return False
 
     ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
-    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-    
+
+    # WARP SOCKS5 proxy (dbsec.co.kr 서버는 WARP 통해서만 접근 가능)
+    warp_proxy = os.getenv("WARP_PROXY", "127.0.0.1:9091")
+    if WARP_AVAILABLE:
+        connector = ProxyConnector.from_url(f"socks5://{warp_proxy}")
+    else:
+        connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=45)) as session:
         try:
             pdf_url = key_url

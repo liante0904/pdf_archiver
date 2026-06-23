@@ -145,6 +145,55 @@ archive 테이블에 `sync_status`와 `pdf_sync_status` 두 개의 상태 컬럼
                                                            retry ≥ 8
 ```
 
+### 파이프라인 아키텍처 (Mermaid)
+
+```mermaid
+flowchart TD
+    %% 트리거 레이어
+    Trigger["API Request / Backend Event Trigger"] --> ScanQueue["Scan Queue\n(report_id & download_url)"]
+
+    %% 가공 및 다운로드 레이어
+    subgraph "PDF Processing Sandbox"
+        ScanQueue --> DownloadHTTP["Download PDF via HTTP\n(httpx Async Client)"]
+        DownloadHTTP --> ValidatePDF{"Verify PDF Integrity\n(정상적인 PDF 포맷 여부 체크)"}
+        
+        ValidatePDF -->|Corrupted / HTML Redirect| RecordFail["Update database\ndownload_status_yn = 'E' (Error)"]
+        ValidatePDF -->|Integrity OK| ExtractMeta["Extract PDF Metadata\n(pypdf / pdfplumber)"]
+        
+        ExtractMeta --> HashGen["Generate PDF MD5 Hash\n(중복 다운로드 원천 차단)"]
+        ExtractMeta --> PageCount["Calculate Page Count\n(총 페이지 수 카운팅)"]
+        ExtractMeta --> TextDetect["Check Text Selectability\n(텍스트 추출 가능 여부 판별)"]
+    end
+
+    %% 스토리지 및 DB 적재 레이어
+    subgraph "Permanent Storage & Database"
+        PageCount & HashGen & TextDetect --> ObjectStorageUpload["Upload to Object Storage\n(MinIO / S3 / Local Backup)"]
+        ObjectStorageUpload --> UpdateDB["Update DB Tables\n- tbl_sec_reports_pdf_archive\n- update tbl_sec_reports.pdf_sync_status"]
+    end
+end
+```
+
+### 네트워크 예외 처리 시퀀스
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Engine as PDF Archiver Engine
+    participant Target as Brokerage Web Server
+    participant DB as Shared PostgreSQL
+
+    Engine ->> Target: 1. Get PDF Request (GET download_url)
+    alt 증권사 서버 장애 / DDOS 차단 (Timeout / HTTP 503)
+        Target -->> Engine: HTTP 503 Service Unavailable / Timeout
+        Engine ->> Engine: 2. Exponential Backoff (3초 -> 9초 -> 27초 지수 대기)
+        Engine ->> Target: 3. Retry Connection
+    end
+    alt 최종 연결 실패 (HTTP 404 / 3회 실패)
+        Engine ->> DB: 4. Mark Status: pdf_sync_status = 9 (장애), download_status_yn = 'N'
+        Note over DB: 어드민 대시보드(Management Hub)에<br/>즉각 빨간색 장애 경고 유닛 노출
+    end
+```
+
 ---
 
 ## 5. 현재 데이터 상태 (2026-05-28 기준)

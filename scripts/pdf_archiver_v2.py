@@ -36,6 +36,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from _bootstrap import build_postgres_dsn
 
+# ── Downloader imports (populate registry) ──────────────────
+from downloaders import (
+    download_ds_pdf, download_mirae_pdf, download_kyobo_pdf,
+    download_hana_pdf, download_ls_pdf, download_dbfi_pdf,
+    download_heungkuk_pdf, download_meritz_pdf,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("pdf_archiver_v2")
 
@@ -43,7 +50,12 @@ log = logging.getLogger("pdf_archiver_v2")
 BATCH_SIZE = int(os.getenv("V2_BATCH_SIZE", "20"))
 WORKERS = int(os.getenv("V2_WORKERS", "6"))
 HTTP_TIMEOUT = int(os.getenv("V2_HTTP_TIMEOUT", "45"))
-RCLONE_REMOTE = os.getenv("V2_RCLONE_REMOTE", os.getenv("RCLONE_REMOTE", "gdrive:/archive/pdf"))
+# ⚠️ GDrive: 서비스 계정(gdrive_sa) 사용 → OAuth 토큰 만료 없음
+# - 서비스 계정: ag-cli-worker@gen-lang-client-0035351125.iam.gserviceaccount.com
+# - JSON 키: /home/ubuntu/workspace/gcp-key.json
+# - rclone remote: gdrive_sa (shared_with_me=true)
+# - GDrive API로 파일 ID 조회 가능 → https://drive.google.com/file/d/{ID}/view
+RCLONE_REMOTE = os.getenv("V2_RCLONE_REMOTE", os.getenv("RCLONE_REMOTE", "gdrive:archive/pdf"))
 RCLONE_BIN = os.getenv("RCLONE_BIN", "rclone")
 RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", os.path.expanduser("~/.config/rclone/rclone.conf"))
 LOCAL_BUFFER = Path(os.getenv("V2_BUFFER_DIR", "/tmp/pdf_archiver_v2"))
@@ -54,31 +66,40 @@ SOURCE_TABLE = '"tbl_sec_reports"'
 ARCHIVE_TABLE = '"tbl_sec_reports_pdf_archive"'
 
 # ── Downloader Registry ─────────────────────────────────────
-# 각 증권사별로 download(url, target_path) -> bool|dict 를 구현한 함수를 등록
+# 각 증권사별 downloader 함수 맵핑
 # 키워드 매칭: firm_nm 에 키워드가 포함되면 해당 downloader 사용
 
-DOWNLOADER_REGISTRY = {}  # {keyword: downloader_function}
+DOWNLOADER_REGISTRY = {
+    "DS": download_ds_pdf,
+    "미래에셋": download_mirae_pdf,
+    "교보": download_kyobo_pdf,
+    "하나": download_hana_pdf,
+    "LS": download_ls_pdf,
+    "흥국": download_heungkuk_pdf,
+    "메리츠": download_meritz_pdf,
+}
+DBFI_FIRM_ORDER = 19  # sec_firm_order 기준 매칭
 
-def register(keyword: str):
-    """데코레이터: downloader registry 등록"""
-    def decorator(fn):
-        DOWNLOADER_REGISTRY[keyword] = fn
-        return fn
-    return decorator
 
-
-def _select_downloader(firm_nm: str):
+def _select_downloader(firm_nm: str, sec_firm_order: int = 0):
     """firm_nm 기준으로 등록된 downloader 찾기 (키워드 매칭)"""
+    # 1. keyword 매칭
     for keyword, fn in DOWNLOADER_REGISTRY.items():
         if keyword in (firm_nm or ""):
             return fn
+    # 2. DBFi special case (order 19)
+    if sec_firm_order == DBFI_FIRM_ORDER:
+        return download_dbfi_pdf
     return None
 
 
 # ── DB helpers ──────────────────────────────────────────────
 
+# ⚠️ SSH 터널 통한 DB 연결은 ssl=False 필수 (asyncpg는 SSL 시도했다가 실패함)
+# psql은 sslmode=prefer라 자동 fallback 되지만 asyncpg는 안 됨
+# 터널: ssh -L 5433:10.0.0.111:5432 oci  (127.0.0.1 아님! DB가 10.0.0.111에 바인딩됨)
 async def db_connect() -> asyncpg.Connection:
-    return await asyncpg.connect(build_postgres_dsn())
+    return await asyncpg.connect(build_postgres_dsn(), ssl=False)
 
 
 async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Record]:
@@ -136,7 +157,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
             storage_backend, storage_key, file_name, file_size, page_count,
             archive_status, download_status_yn, pdf_sync_status, sync_status,
             created_at, updated_at, retry_count
-        ) VALUES ($1,$2,$3,$4,$5,$6,'googledrive',$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),NOW(),$16)
+        ) VALUES ($1,$2,$3,$4,$5,$6,'googledrive',$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW(),$15)
         ON CONFLICT (report_id) DO UPDATE SET
             firm_nm = EXCLUDED.firm_nm,
             title = EXCLUDED.title,
@@ -207,22 +228,65 @@ def build_storage_key(firm: str, title: str, reg_dt: str, report_id: int) -> str
     return f"{y_m}/{firm}/{filename}"
 
 
-# ── PDF download (generic wget) ─────────────────────────────
+# ── PDF download (curl-based, handles Korean URLs + Referer) ─
+
+def _clean_url(url: str) -> str:
+    """URL 끝의 스크래핑 가비지 제거 (') , ' 등)"""
+    import re
+    # trailing garbage: ')  , ')  , '  등
+    cleaned = re.sub(r"[')]+\s*$", "", url.strip())
+    return cleaned
+
+
+def _encode_url(url: str) -> str:
+    """URL 내 한글 등 비ASCII 문자를 percent-encoding"""
+    from urllib.parse import quote, unquote, urlparse, urlunparse
+    parts = list(urlparse(url))
+    # path 부분만 인코딩 (query는 그대로)
+    parts = [
+        parts[0], parts[1],
+        quote(unquote(parts[2]), safe='/:@!$&*()+,;='),
+        parts[3],
+        quote(unquote(parts[4]), safe='/:@!$&*()+,;='),
+        parts[5],
+    ]
+    return urlunparse(parts)
+
 
 async def _download_wget(url: str, target_path: Path, timeout: int = 30) -> bool:
-    """wget으로 PDF 다운로드"""
+    """curl로 PDF 다운로드 (Referer + URL 인코딩)"""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    url = _clean_url(url)
+    encoded_url = _encode_url(url)
+    # Referer: scheme://host
+    try:
+        parsed = urlparse(url)
+        referer = f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        referer = url.rsplit('/', 1)[0] if '/' in url else url
+
     cmd = [
-        "wget", "-q", "-O", str(target_path),
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        f"--timeout={timeout}", "--tries=2", "--no-check-certificate",
-        url,
+        "curl", "-sL", "-o", str(target_path),
+        "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "-H", f"Referer: {referer}",
+        "-H", "Accept: application/pdf,*/*",
+        "--max-time", str(timeout),
+        "--retry", "2",
+        "--insecure",
+        encoded_url,
     ]
-    proc = await asyncio.create_subprocess_exec(*cmd)
-    await proc.wait()
-    return proc.returncode == 0 and target_path.exists() and target_path.stat().st_size > 1024
+    proc = await asyncio.create_subprocess_exec(*cmd, stderr=asyncio.subprocess.PIPE)
+    _, stderr = await proc.communicate()
+    exists = target_path.exists()
+    size = target_path.stat().st_size if exists else -1
+    if proc.returncode != 0 or not exists or size <= 1024:
+        err = stderr.decode(errors="replace")[:200] if stderr else ""
+        log.warning(f"curl failed rc={proc.returncode} exists={exists} size={size} err={err}")
+        return False
+    return True
 
 
-def _is_pdf(path: Path) -> bool:
+async def _is_pdf(path: Path) -> bool:
     """파일이 PDF인지 확인 (매직 바이트 검사)"""
     try:
         header = path.read_bytes()[:5]
@@ -253,6 +317,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
         title = row["article_title"] or "untitled"
         reg_dt = row["reg_dt"] or ""
         pdf_url = row["pdf_url"] or row["report_unique_key"] or row["telegram_url"] or row["download_url"]
+        sec_order = row["sec_firm_order"] or 0
 
         if not pdf_url:
             await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
@@ -267,10 +332,18 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
 
         # 1. 다운로드 시도 (downloader registry → fallback wget)
         ok = False
-        downloader = _select_downloader(firm)
+        downloader = _select_downloader(firm, sec_order)
         if downloader:
             try:
-                ok = await downloader(pdf_url, tmp_path)
+                candidates = [
+                    u for u in [row["pdf_url"], row["telegram_url"], row["download_url"], row["report_unique_key"]]
+                    if u and str(u).strip()
+                ]
+                result = await downloader(candidates, local_target, title, report_id, firm, reg_dt)
+                if result and isinstance(result, dict):
+                    ok = True
+                    if tmp_path.exists():
+                        tmp_path.unlink(missing_ok=True)
             except Exception as e:
                 log.warning(f"[{report_id}] custom downloader error: {e}")
 
@@ -279,31 +352,47 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
             if not ok:
                 log.warning(f"[{report_id}] wget failed: {pdf_url[:100]}...")
 
-        if not ok or not _is_pdf(tmp_path):
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
+        # 2. determine which file to process (downloader → local_target, wget → tmp_path)
+        if ok:
+            if local_target.exists() and local_target.stat().st_size > 1024:
+                work_path = local_target
+            elif tmp_path.exists() and tmp_path.stat().st_size > 1024:
+                work_path = tmp_path
+            else:
+                ok = False
+            # verify it's actually a PDF
+            if ok and not await _is_pdf(work_path):
+                log.warning(f"[{report_id}] not a PDF, discarding size={work_path.stat().st_size}")
+                ok = False
+
+        if not ok:
+            for p in [tmp_path, local_target]:
+                if p.exists():
+                    p.unlink(missing_ok=True)
             await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
                                  storage_key="", file_size=0, page_count=0,
                                  pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
             return False
 
-        # 2. hash 계산
-        pdf_hash_hex, pdf_hash_bytes = compute_hash(tmp_path)
-        file_size = tmp_path.stat().st_size
+        # 3. hash 계산
+        pdf_hash_hex, pdf_hash_bytes = compute_hash(work_path)
+        file_size = work_path.stat().st_size
 
-        # 3. 중복 검사
+        # 4. 중복 검사
         existing = await find_by_hash(conn, pdf_hash_hex)
         if existing:
-            # 중복: canonical 참조만 복사, 업로드 스킵
             log.info(f"[{report_id}] DUPLICATE → canonical={existing['report_id']} hash={pdf_hash_hex[:16]}...")
             await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
                                  existing["storage_key"], existing["file_size"] or file_size,
                                  existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True, retry_delta=0)
-            tmp_path.unlink(missing_ok=True)
+            work_path.unlink(missing_ok=True)
             return True
 
-        # 4. 신규: tmp → final, rclone 업로드
-        tmp_path.rename(local_target)
+        # 5. 신규 업로드
+        if work_path != local_target:
+            work_path.rename(local_target)
+            work_path = local_target
+
         uploaded = await rclone_upload(str(local_target), storage_key)
 
         if uploaded:
