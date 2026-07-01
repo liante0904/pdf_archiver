@@ -106,7 +106,7 @@ async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Re
     """메인 테이블은 읽기 전용, 상태는 archive 테이블 LEFT JOIN 으로 판단"""
     return await conn.fetch(
         f"""
-        SELECT s.report_id, s.sec_firm_order, s.report_unique_key, s.pdf_url, s.telegram_url, s.download_url,
+        SELECT s.report_id, s.firm_id, s.report_unique_key, s.pdf_url, s.telegram_url, s.download_url,
                s.firm_nm, s.article_title, s.reg_dt,
                COALESCE(a.retry_count, 0) as retry_count
         FROM {SOURCE_TABLE} s
@@ -317,7 +317,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
         title = row["article_title"] or "untitled"
         reg_dt = row["reg_dt"] or ""
         pdf_url = row["pdf_url"] or row["report_unique_key"] or row["telegram_url"] or row["download_url"]
-        sec_order = row["sec_firm_order"] or 0
+        sec_order = row["firm_id"] or 0
 
         if not pdf_url:
             await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
