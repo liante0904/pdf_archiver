@@ -5,7 +5,7 @@
 LOCAL_DIR="/home/ubuntu/downloads/pdf_archive_temp"
 REMOTE_DIR="gdrive:archive/pdf"
 DB_PATH="/home/ubuntu/sqlite3/telegram.db"
-PYTHON_BIN="/home/ubuntu/.cache/uv/environments-v2/pdf-archiver-async-9167053ae5c63912/bin/python3"
+PYTHON_BIN="python3"
 
 LOCK_FILE="/home/ubuntu/prod/pdf_archiver/uploader.lock"
 DOWNLOADER_LOCK="/home/ubuntu/prod/pdf_archiver/downloader.lock"
