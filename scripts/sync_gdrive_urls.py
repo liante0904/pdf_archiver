@@ -25,12 +25,15 @@ def get_db():
         dbname=os.getenv("POSTGRES_DB_REPORTS", os.getenv("POSTGRES_DB", "ssh_reports_hub")),
     )
 
-def rclone_lsjson(remote_path: str) -> list[dict]:
+def rclone_lsjson(remote_path: str, recursive: bool = False) -> list[dict]:
     """rclone lsjson → 파일 목록"""
     remote = os.getenv("RCLONE_REMOTE", "gdrive:archive/pdf")
     full = f"{remote}/{remote_path}" if remote_path else remote
+    cmd = ["rclone", "lsjson", full, "--files-only"]
+    if recursive:
+        cmd.append("--recursive")
     result = subprocess.run(
-        ["rclone", "lsjson", full, "--files-only", "--recursive"],
+        cmd,
         capture_output=True, text=True, timeout=120,
     )
     if result.returncode != 0:
@@ -46,14 +49,20 @@ def extract_report_id(filename: str) -> int | None:
     m = re.search(r'_(\d{6,})\.pdf$', filename)
     return int(m.group(1)) if m else None
 
+def extract_year_month(file_path: str) -> str | None:
+    """파일 경로에서 YYYY-MM 패턴 추출 (예: 2026-03)"""
+    m = re.search(r'(2\d{3}-\d{2})', file_path)
+    return m.group(1) if m else None
+
 def sync_new(conn):
     """최근 업로드된 PDF → gdrive_pdf_url 기록"""
     # pdf_sync_status=2 (archive 완료) + gdrive_pdf_url IS NULL 인 레코드
     cur = conn.cursor()
     cur.execute("""
-        SELECT report_id, pdf_sync_status, download_url
-        FROM tbl_sec_reports
-        WHERE pdf_sync_status >= 2 AND gdrive_pdf_url IS NULL
+        SELECT r.report_id, r.pdf_sync_status, r.download_url, a.file_path
+        FROM tbl_sec_reports r
+        JOIN tbl_sec_reports_pdf_archive a ON r.report_id = a.report_id
+        WHERE r.pdf_sync_status >= 2 AND r.gdrive_pdf_url IS NULL
         LIMIT 200
     """)
     rows = cur.fetchall()
@@ -62,16 +71,32 @@ def sync_new(conn):
         return
 
     print(f"Scanning GDrive for {len(rows)} records...")
-    files = rclone_lsjson("")
+    
+    # 대상 파일들의 경로에서 YYYY-MM 디렉터리 추출
+    ym_dirs = set()
+    for report_id, status, dl_url, file_path in rows:
+        ym = extract_year_month(file_path)
+        if ym:
+            ym_dirs.add(ym)
+
+    if not ym_dirs:
+        print("Warning: no YYYY-MM directories identified from file_paths. Fallback to root scan.")
+        files = rclone_lsjson("", recursive=False)
+    else:
+        files = []
+        for ym in ym_dirs:
+            print(f"Scanning GDrive folder: {ym}...")
+            files.extend(rclone_lsjson(ym, recursive=False))
+
     if not files:
-        print("No GDrive files found (rate limited?)")
+        print("No GDrive files found (rate limited or empty?)")
         return
 
     # Build filename → ID map
     id_map = {f["Name"]: f["ID"] for f in files}
 
     updated = 0
-    for report_id, status, dl_url in rows:
+    for report_id, status, dl_url, file_path in rows:
         # Try to find matching GDrive file by report_id pattern
         for name, fid in id_map.items():
             rid = extract_report_id(name)
@@ -90,7 +115,7 @@ def sync_new(conn):
 def backfill(conn):
     """전체 GDrive 스캔 → 모든 매칭 레코드 백필"""
     print("Backfill: scanning all GDrive files...")
-    files = rclone_lsjson("")
+    files = rclone_lsjson("", recursive=True)
     if not files:
         print("No GDrive files found")
         return
