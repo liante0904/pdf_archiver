@@ -3,12 +3,15 @@
 
 # 환경 변수를 제거하여 사용자 기본 환경을 따르도록 설정
 LOCAL_DIR="/home/ubuntu/downloads/pdf_archive_temp"
-REMOTE_DIR="onedrive:/archive/pdf"
+REMOTE_DIR="gdrive:archive/pdf"
 DB_PATH="/home/ubuntu/sqlite3/telegram.db"
 PYTHON_BIN="/home/ubuntu/.cache/uv/environments-v2/pdf-archiver-async-9167053ae5c63912/bin/python3"
 
 LOCK_FILE="/home/ubuntu/prod/pdf_archiver/uploader.lock"
 DOWNLOADER_LOCK="/home/ubuntu/prod/pdf_archiver/downloader.lock"
+
+# 락 파일 디렉토리 생성 보장
+mkdir -p "$(dirname "$LOCK_FILE")"
 
 # 중복 실행 방지 및 다운로더 작업 중 여부 확인
 if [ -f "$LOCK_FILE" ]; then
@@ -46,7 +49,14 @@ for dir in "$LOCAL_DIR"/*; do
     fi
 done
 
-echo "[$(date)] Rclone move finished. Updating DB status..."
+echo "[$(date)] Rclone move finished. Syncing gdrive_pdf_url..."
+# .env 파일에서 POSTGRES_PASSWORD 로드
+if [ -f ".env" ]; then
+    DB_PASSWORD=$(grep "^POSTGRES_PASSWORD=" .env | cut -d'=' -f2-)
+else
+    DB_PASSWORD=""
+fi
+RCLONE_REMOTE=gdrive:archive/pdf POSTGRES_HOST=10.0.0.111 POSTGRES_PASSWORD="$DB_PASSWORD" python3 scripts/sync_gdrive_urls.py
 
 # 파이썬은 오직 로컬 파일 삭제 여부를 확인해 DB를 업데이트하는 '검증/통계' 역할만 수행 (1초 컷)
 $PYTHON_BIN -c "
