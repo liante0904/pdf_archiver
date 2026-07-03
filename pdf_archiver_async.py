@@ -320,7 +320,7 @@ class PDFArchiver(RcloneManager):
         await conn.execute(
             f'''
             INSERT INTO {Config.META_TABLE} (
-                report_id, firm_nm, title, author, report_date, pdf_url, {Config.PDF_HASH_COL},
+                report_id, firm_nm, title, author, reg_dt, pdf_url, {Config.PDF_HASH_COL},
                 has_text, is_encrypted, storage_backend, storage_key, download_url, telegram_url,
                 key, archive_status, file_name, download_status_yn, file_path, file_size, page_count,
                 last_accessed_at, {Config.PDF_STATUS_COL}, created_at, updated_at, retry_count
@@ -329,7 +329,7 @@ class PDFArchiver(RcloneManager):
             )
             ON CONFLICT (report_id) DO UPDATE SET
                 firm_nm = EXCLUDED.firm_nm, title = EXCLUDED.title, author = COALESCE(EXCLUDED.author, {Config.META_TABLE}.author),
-                report_date = EXCLUDED.report_date, pdf_url = EXCLUDED.pdf_url, {Config.PDF_HASH_COL} = COALESCE(EXCLUDED.{Config.PDF_HASH_COL}, {Config.META_TABLE}.{Config.PDF_HASH_COL}),
+                reg_dt = EXCLUDED.reg_dt, pdf_url = EXCLUDED.pdf_url, {Config.PDF_HASH_COL} = COALESCE(EXCLUDED.{Config.PDF_HASH_COL}, {Config.META_TABLE}.{Config.PDF_HASH_COL}),
                 storage_backend = COALESCE(EXCLUDED.storage_backend, {Config.META_TABLE}.storage_backend),
                 storage_key = COALESCE(EXCLUDED.storage_key, {Config.META_TABLE}.storage_key),
                 archive_status = COALESCE(EXCLUDED.archive_status, {Config.META_TABLE}.archive_status),
@@ -342,7 +342,7 @@ class PDFArchiver(RcloneManager):
                 updated_at = NOW(), retry_count = COALESCE({Config.META_TABLE}.retry_count, 0) + $24
             ''',
             int(payload["report_id"]), payload.get("firm_nm"), payload.get("title"), payload.get("author"),
-            payload.get("report_date"), payload.get("pdf_url"), payload.get("pdf_hash"), payload.get("has_text"),
+            payload.get("reg_dt"), payload.get("pdf_url"), payload.get("pdf_hash"), payload.get("has_text"),
             payload.get("is_encrypted"), payload.get("storage_backend") or "onedrive",
             storage_key or payload.get("storage_key") or (str(file_path) if file_path else None),
             payload.get("download_url"), payload.get("telegram_url"), payload.get("report_unique_key"),
