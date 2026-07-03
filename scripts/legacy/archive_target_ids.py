@@ -25,7 +25,7 @@ async def archive_specific_ids(report_ids):
     # 5개 ID에 대한 정보만 직접 쿼리
     query = f"""
         SELECT report_id as id, report_id, sec_firm_order, key, pdf_url, telegram_url, download_url,
-               firm_nm, article_title, reg_dt
+               firm_nm, article_title, report_date
         FROM tbl_sec_reports
         WHERE report_id = ANY($1)
     """
@@ -51,12 +51,12 @@ async def archive_specific_ids(report_ids):
             path = payload["path"]
             size = payload["size"]
             pages = payload["pages"]
-            reg_dt = payload["reg_dt"]
+            report_date = payload["report_date"]
             rel_path = path.relative_to(archiver.local_dir)
             
             await conn.execute(
-                'INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, reg_dt) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (report_id) DO UPDATE SET file_path=EXCLUDED.file_path',
-                int(r_id), firm, title, str(rel_path), size, pages, reg_dt
+                'INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, report_date) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (report_id) DO UPDATE SET file_path=EXCLUDED.file_path',
+                int(r_id), firm, title, str(rel_path), size, pages, report_date
             )
             await conn.execute('UPDATE tbl_sec_reports SET sync_status = 2 WHERE report_id = $1', int(r_id))
         

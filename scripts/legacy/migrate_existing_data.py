@@ -21,7 +21,7 @@ async def migrate_data():
         # ON CONFLICT를 사용하여 이미 존재하는 데이터는 건너뜀
         insert_query = f"""
             INSERT INTO {PDF_ARCHIVE_TABLE} (
-                report_id, firm_nm, title, file_path, file_size, page_count, reg_dt,
+                report_id, firm_nm, title, file_path, file_size, page_count, report_date,
                 pdf_sync_status, sync_status, retry_count
             )
             SELECT 
@@ -31,7 +31,7 @@ async def migrate_data():
                 archive_path, 
                 0, -- file_size (알 수 없음)
                 0, -- page_count (알 수 없음)
-                reg_dt,
+                report_date,
                 2,
                 2,
                 0

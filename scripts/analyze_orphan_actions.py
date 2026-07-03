@@ -15,7 +15,7 @@ async def analyze_orphan_actions():
     conn = await asyncpg.connect(postgres_url)
     
     print("[1/3] DB 데이터 로드 중...")
-    rows = await conn.fetch('SELECT report_id, firm_nm, article_title, reg_dt FROM tbl_sec_reports')
+    rows = await conn.fetch('SELECT report_id, firm_nm, article_title, report_date FROM tbl_sec_reports')
     
     id_to_record = {}
     logical_to_best_id = {} # (firm, title, date) -> lowest_id
@@ -25,7 +25,7 @@ async def analyze_orphan_actions():
         id_to_record[rid] = r
         firm = "LS" if "LS" in r['firm_nm'] or "이베스트" in r['firm_nm'] else r['firm_nm']
         ntitle = normalize_text(r['article_title'])
-        key = (firm, ntitle, r['reg_dt'])
+        key = (firm, ntitle, r['report_date'])
         
         if key not in logical_to_best_id or rid < logical_to_best_id[key]:
             logical_to_best_id[key] = rid

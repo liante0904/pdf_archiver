@@ -23,7 +23,7 @@ async def fix_missing_files():
         FROM tbl_sec_reports r
         JOIN "tbl_sec_reports_pdf_archive" m ON r.report_id = m.report_id
         WHERE (r.firm_nm LIKE '%LS%' OR r.firm_nm LIKE '%이베스트%')
-          AND r.reg_dt LIKE '202101%'
+          AND r.report_date LIKE '202101%'
           AND r.sync_status = 2
     """)
     

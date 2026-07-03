@@ -38,7 +38,7 @@ async def fetch_dbfi_row(report_id=None):
         if report_id:
             sql = """
                 SELECT report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url,
-                       download_url, firm_nm, article_title, reg_dt
+                       download_url, firm_nm, article_title, report_date
                 FROM tbl_sec_reports
                 WHERE report_id = $1
             """
@@ -46,12 +46,12 @@ async def fetch_dbfi_row(report_id=None):
         else:
             sql = """
                 SELECT report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url,
-                       download_url, firm_nm, article_title, reg_dt
+                       download_url, firm_nm, article_title, report_date
                 FROM tbl_sec_reports
                 WHERE sec_firm_order = 19
                   AND COALESCE(NULLIF(pdf_url, ''), NULLIF(report_unique_key, ''), NULLIF(telegram_url, ''),
                                NULLIF(download_url, '')) IS NOT NULL
-                ORDER BY reg_dt DESC
+                ORDER BY report_date DESC
                 LIMIT 1
             """
             row = await conn.fetchrow(sql)
@@ -82,7 +82,7 @@ async def run_smoke(report_id=None, output_dir=None, keep_file=False):
     report_id_value = _row_get(row, "report_id")
     title = _row_get(row, "article_title") or "DBfi Smoke"
     firm = _row_get(row, "firm_nm") or "DBfi"
-    reg_dt = _row_get(row, "reg_dt") or ""
+    report_date = _row_get(row, "report_date") or ""
 
     if output_dir:
         out_dir = Path(output_dir)
@@ -98,7 +98,7 @@ async def run_smoke(report_id=None, output_dir=None, keep_file=False):
         title=title,
         report_id=report_id_value,
         firm=firm,
-        reg_dt=reg_dt,
+        report_date=report_date,
     )
 
     print("run_smoke: download call finished")

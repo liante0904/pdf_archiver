@@ -18,9 +18,9 @@ async def verify_sample_orphans():
         print(f"\n조사 중: {s['date']} | {s['title']}")
         # 제목에 해당 키워드가 포함되고 날짜가 같은 모든 레코드 조회
         rows = await conn.fetch("""
-            SELECT report_id, firm_nm, article_title, reg_dt
+            SELECT report_id, firm_nm, article_title, report_date
             FROM tbl_sec_reports
-            WHERE reg_dt = $1 AND article_title LIKE $2
+            WHERE report_date = $1 AND article_title LIKE $2
         """, s['date'], f"%{s['title']}%")
         
         if rows:

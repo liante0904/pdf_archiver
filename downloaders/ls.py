@@ -9,7 +9,7 @@ except ImportError:
     ProxyConnector = None
 from utils import _is_pdf_payload, _pdf_hash_bytes, get_pdf_page_count
 
-async def download_ls_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+async def download_ls_pdf(candidates, target_path, title, report_id, firm, report_date):
     """LS증권: msg.ls-sec.co.kr 직접 HTTPS or View.jsp → download.jsp 2-step via WARP"""
     tmp_path = target_path.with_suffix(".tmp")
 
@@ -35,7 +35,7 @@ async def download_ls_pdf(candidates, target_path, title, report_id, firm, reg_d
                         pages = await get_pdf_page_count(target_path)
                         return {
                             "report_id": report_id, "firm": firm, "title": title, "path": target_path,
-                            "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+                            "size": target_path.stat().st_size, "pages": pages, "report_date": report_date,
                             "pdf_hash": _pdf_hash_bytes(body),
                         }
         except Exception as e:
@@ -77,7 +77,7 @@ async def download_ls_pdf(candidates, target_path, title, report_id, firm, reg_d
                                 pages = await get_pdf_page_count(target_path)
                                 return {
                                     "report_id": report_id, "firm": firm, "title": title, "path": target_path,
-                                    "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+                                    "size": target_path.stat().st_size, "pages": pages, "report_date": report_date,
                                     "pdf_hash": _pdf_hash_bytes(body),
                                 }
         except Exception as e:

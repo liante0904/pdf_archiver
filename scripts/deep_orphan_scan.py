@@ -24,7 +24,7 @@ async def deep_orphan_scan():
     conn = await asyncpg.connect(postgres_url)
     
     print("[1/3] DB 데이터 로드 및 인덱싱 중...")
-    rows = await conn.fetch('SELECT report_id, firm_nm, article_title, reg_dt FROM tbl_sec_reports')
+    rows = await conn.fetch('SELECT report_id, firm_nm, article_title, report_date FROM tbl_sec_reports')
     
     active_ids = set()
     logical_map = defaultdict(list) # (firm, title, date) -> [ids]
@@ -35,7 +35,7 @@ async def deep_orphan_scan():
             active_ids.add(rid)
             firm = "LS" if "LS" in r['firm_nm'] or "이베스트" in r['firm_nm'] else r['firm_nm']
             norm_title = normalize_text(r['article_title'])
-            logical_map[(firm, norm_title, r['reg_dt'])].append(rid)
+            logical_map[(firm, norm_title, r['report_date'])].append(rid)
     
     await conn.close()
     print(f"      - DB 로드 완료: {len(active_ids)} 건")

@@ -107,7 +107,7 @@ async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Re
     return await conn.fetch(
         f"""
         SELECT s.report_id, s.firm_id, s.report_unique_key, s.pdf_url, s.telegram_url, s.download_url,
-               s.firm_nm, s.article_title, s.reg_dt,
+               s.firm_nm, s.article_title, s.report_date,
                COALESCE(a.retry_count, 0) as retry_count
         FROM {SOURCE_TABLE} s
         LEFT JOIN {ARCHIVE_TABLE} a ON s.report_id = a.report_id
@@ -117,7 +117,7 @@ async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Re
                OR NULLIF(BTRIM(s.telegram_url), '') IS NOT NULL
                OR NULLIF(BTRIM(s.download_url), '') IS NOT NULL
                OR NULLIF(BTRIM(s.report_unique_key), '') IS NOT NULL)
-        ORDER BY COALESCE(a.retry_count, 0) ASC, s.reg_dt DESC, s.report_id ASC
+        ORDER BY COALESCE(a.retry_count, 0) ASC, s.report_date DESC, s.report_id ASC
         LIMIT $1
         """,
         limit,
@@ -140,7 +140,7 @@ async def find_by_hash(conn: asyncpg.Connection, pdf_hash: str) -> Optional[dict
 
 
 async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
-                         title: str, reg_dt: str, pdf_url: str,
+                         title: str, report_date: str, pdf_url: str,
                          storage_key: str, file_size: int, page_count: int,
                          pdf_hash: str, pdf_hash_bytes: bytes, success: bool,
                          retry_delta: int = 0):
@@ -153,7 +153,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
     await conn.execute(
         f"""
         INSERT INTO {ARCHIVE_TABLE} (
-            report_id, firm_nm, title, reg_dt, pdf_url, pdf_hash,
+            report_id, firm_nm, title, report_date, pdf_url, pdf_hash,
             storage_backend, storage_key, file_name, file_size, page_count,
             archive_status, download_status_yn, pdf_sync_status, sync_status,
             created_at, updated_at, retry_count
@@ -161,7 +161,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
         ON CONFLICT (report_id) DO UPDATE SET
             firm_nm = EXCLUDED.firm_nm,
             title = EXCLUDED.title,
-            reg_dt = EXCLUDED.reg_dt,
+            report_date = EXCLUDED.report_date,
             pdf_url = EXCLUDED.pdf_url,
             pdf_hash = COALESCE(EXCLUDED.pdf_hash, {ARCHIVE_TABLE}.pdf_hash),
             storage_backend = 'googledrive',
@@ -176,7 +176,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
             retry_count = COALESCE({ARCHIVE_TABLE}.retry_count, 0) + EXCLUDED.retry_count,
             updated_at = NOW()
         """,
-        report_id, firm_nm, title, reg_dt, pdf_url, pdf_hash_bytes,
+        report_id, firm_nm, title, report_date, pdf_url, pdf_hash_bytes,
         storage_key, file_name, file_size, page_count,
         archive_status, dl_yn, status, status, retry_delta,
     )
@@ -216,9 +216,9 @@ async def rclone_upload(local_path: str, remote_path: str) -> bool:
 
 # ── File path builder ───────────────────────────────────────
 
-def build_storage_key(firm: str, title: str, reg_dt: str, report_id: int) -> str:
+def build_storage_key(firm: str, title: str, report_date: str, report_id: int) -> str:
     """GDrive/OneDrive 경로 생성: YYYY-MM/firm/YYMMDD_title_report_id.pdf"""
-    clean_dt = re.sub(r'[^0-9]', '', str(reg_dt)) if reg_dt else "00000000"
+    clean_dt = re.sub(r'[^0-9]', '', str(report_date)) if report_date else "00000000"
     y_m = f"{clean_dt[:4]}-{clean_dt[4:6]}"
     yy_mm_dd = clean_dt[2:8]
     normalized = unicodedata.normalize('NFC', title or '')
@@ -315,17 +315,17 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
         report_id = row["report_id"]
         firm = row["firm_nm"] or "UNKNOWN"
         title = row["article_title"] or "untitled"
-        reg_dt = row["reg_dt"] or ""
+        report_date = row["report_date"] or ""
         pdf_url = row["pdf_url"] or row["report_unique_key"] or row["telegram_url"] or row["download_url"]
         sec_order = row["firm_id"] or 0
 
         if not pdf_url:
-            await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
+            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
                                  storage_key="", file_size=0, page_count=0,
                                  pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
             return False
 
-        storage_key = build_storage_key(firm, title, reg_dt, report_id)
+        storage_key = build_storage_key(firm, title, report_date, report_id)
         local_target = LOCAL_BUFFER / storage_key
         local_target.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = local_target.with_suffix(".tmp")
@@ -339,7 +339,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
                     u for u in [row["pdf_url"], row["telegram_url"], row["download_url"], row["report_unique_key"]]
                     if u and str(u).strip()
                 ]
-                result = await downloader(candidates, local_target, title, report_id, firm, reg_dt)
+                result = await downloader(candidates, local_target, title, report_id, firm, report_date)
                 if result and isinstance(result, dict):
                     ok = True
                     if tmp_path.exists():
@@ -369,7 +369,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
             for p in [tmp_path, local_target]:
                 if p.exists():
                     p.unlink(missing_ok=True)
-            await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
+            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
                                  storage_key="", file_size=0, page_count=0,
                                  pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
             return False
@@ -382,7 +382,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
         existing = await find_by_hash(conn, pdf_hash_hex)
         if existing:
             log.info(f"[{report_id}] DUPLICATE → canonical={existing['report_id']} hash={pdf_hash_hex[:16]}...")
-            await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
+            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
                                  existing["storage_key"], existing["file_size"] or file_size,
                                  existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True, retry_delta=0)
             work_path.unlink(missing_ok=True)
@@ -396,7 +396,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
         uploaded = await rclone_upload(str(local_target), storage_key)
 
         if uploaded:
-            await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
+            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
                                  storage_key, file_size, page_count=0,
                                  pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=True, retry_delta=0)
             local_target.unlink(missing_ok=True)
@@ -404,7 +404,7 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
             return True
         else:
             # 업로드 실패 → 파일 보존, 다음 run에서 재시도
-            await upsert_archive(conn, report_id, firm, title, reg_dt, pdf_url,
+            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
                                  storage_key, file_size, page_count=0,
                                  pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=False, retry_delta=1)
             log.warning(f"[{report_id}] UPLOAD FAILED {firm} | {title[:30]}...")

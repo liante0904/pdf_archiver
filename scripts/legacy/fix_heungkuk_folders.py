@@ -5,7 +5,7 @@
 """
 흥국증권 OneDrive 잘못된 폴더 재배치
 
-문제: reg_dt가 시간값으로 처리돼 0300-00/Unknown(28)/ 같은 이상한 폴더에
+문제: report_date가 시간값으로 처리돼 0300-00/Unknown(28)/ 같은 이상한 폴더에
 저장된 흥국증권 파일들을 올바른 YYYY-MM/흥국증권/ 경로로 이동하고
 tbl_sec_reports_pdf_archive의 file_path, storage_key를 업데이트한다.
 
@@ -80,9 +80,9 @@ def psql_exec(sql: str) -> bool:
 
 # ── 파일명/경로 생성 (pdf_archiver_async._make_file_path 동일 로직) ───────────
 
-def _build_remote_path(firm: str, title: str, reg_dt: str, report_id: int) -> tuple[str, str]:
+def _build_remote_path(firm: str, title: str, report_date: str, report_id: int) -> tuple[str, str]:
     """(relative_path, y_m) 반환. relative_path = storage_key 값으로 사용."""
-    clean_dt = re.sub(r"[^0-9]", "", str(reg_dt)) if reg_dt else "00000000"
+    clean_dt = re.sub(r"[^0-9]", "", str(report_date)) if report_date else "00000000"
     y_m = f"{clean_dt[:4]}-{clean_dt[4:6]}"
     yy_mm_dd = clean_dt[2:8]
     normalized = unicodedata.normalize("NFC", title or "")
@@ -139,7 +139,7 @@ def fetch_metadata(report_ids: list[int]) -> dict[int, dict]:
         return {}
     ids_str = ",".join(str(i) for i in report_ids)
     rows = psql_rows(f"""
-        SELECT report_id, firm_nm, reg_dt, article_title
+        SELECT report_id, firm_nm, report_date, article_title
         FROM tbl_sec_reports
         WHERE report_id IN ({ids_str})
     """)
@@ -148,7 +148,7 @@ def fetch_metadata(report_ids: list[int]) -> dict[int, dict]:
         if len(parts) >= 4:
             meta[int(parts[0])] = {
                 "firm_nm": parts[1],
-                "reg_dt": parts[2],
+                "report_date": parts[2],
                 "title": parts[3],
             }
     return meta
@@ -204,7 +204,7 @@ def main(execute: bool):
             continue
 
         new_rel_path, _ = _build_remote_path(
-            meta["firm_nm"], meta["title"], meta["reg_dt"], report_id
+            meta["firm_nm"], meta["title"], meta["report_date"], report_id
         )
         src = f"{RCLONE_REMOTE}/{wrong_folder}/{subfolder}/{filename}"
         dst = f"{RCLONE_REMOTE}/{new_rel_path}"

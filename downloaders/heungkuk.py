@@ -14,7 +14,7 @@ LIST_PAGES = [
 log = logging.getLogger("pdf_archiver_v2.heungkuk")
 
 
-async def download_heungkuk_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+async def download_heungkuk_pdf(candidates, target_path, title, report_id, firm, report_date):
     """흥국증권: board list에서 title 매칭 → key 추출 → download.do"""
     tmp_path = target_path.with_suffix(".tmp")
 
@@ -110,7 +110,7 @@ async def download_heungkuk_pdf(candidates, target_path, title, report_id, firm,
                 "report_id": report_id, "firm": firm, "title": title,
                 "path": target_path,
                 "size": target_path.stat().st_size, "pages": pages,
-                "reg_dt": reg_dt, "pdf_hash": _pdf_hash_bytes(body),
+                "report_date": report_date, "pdf_hash": _pdf_hash_bytes(body),
             }
         except Exception as e:
             log.warning("흥국증권: report_id=%s download 예외: %s", report_id, e)

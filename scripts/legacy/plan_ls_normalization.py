@@ -26,27 +26,27 @@ async def plan_ls_normalization():
     query = """
         WITH normalized_reports AS (
             SELECT 
-                report_id, reg_dt, key, firm_nm, article_title, "sync_status",
+                report_id, report_date, key, firm_nm, article_title, "sync_status",
                 LOWER(REGEXP_REPLACE(article_title, '\s+', '', 'g')) as norm_title
             FROM tbl_sec_reports
             WHERE (firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%')
         ),
         dup_groups AS (
-            SELECT norm_title, reg_dt
+            SELECT norm_title, report_date
             FROM normalized_reports
-            GROUP BY norm_title, reg_dt
+            GROUP BY norm_title, report_date
             HAVING COUNT(*) > 1
         )
         SELECT n.* FROM normalized_reports n
-        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.reg_dt = d.reg_dt
-        ORDER BY n.reg_dt DESC, n.norm_title, n.report_id
+        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.report_date = d.report_date
+        ORDER BY n.report_date DESC, n.norm_title, n.report_id
     """
     
     rows = await conn.fetch(query)
     
     groups = {}
     for r in rows:
-        key = (r['norm_title'], r['reg_dt'])
+        key = (r['norm_title'], r['report_date'])
         if key not in groups:
             groups[key] = []
         groups[key].append(dict(r))
@@ -71,7 +71,7 @@ async def plan_ls_normalization():
         
         # 상위 5개 그룹만 예시 출력
         if len(update_list) <= 5:
-            print(f"\n[그룹] {survivor['reg_dt']} | {survivor['article_title']}")
+            print(f"\n[그룹] {survivor['report_date']} | {survivor['article_title']}")
             print(f"  √ 유지(Survivor): ID {survivor['report_id']}")
             print(f"    - Old KEY: {survivor['key']}")
             print(f"    - New KEY: {new_key} (from ID {highest_id_member['report_id']})")

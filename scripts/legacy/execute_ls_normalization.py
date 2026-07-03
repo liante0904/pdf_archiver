@@ -23,27 +23,27 @@ async def execute_ls_normalization():
     query = """
         WITH normalized_reports AS (
             SELECT 
-                report_id, reg_dt, key, firm_nm, article_title, "sync_status",
+                report_id, report_date, key, firm_nm, article_title, "sync_status",
                 LOWER(REGEXP_REPLACE(article_title, '\s+', '', 'g')) as norm_title
             FROM tbl_sec_reports
             WHERE (firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%')
         ),
         dup_groups AS (
-            SELECT norm_title, reg_dt
+            SELECT norm_title, report_date
             FROM normalized_reports
-            GROUP BY norm_title, reg_dt
+            GROUP BY norm_title, report_date
             HAVING COUNT(*) > 1
         )
         SELECT n.* FROM normalized_reports n
-        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.reg_dt = d.reg_dt
-        ORDER BY n.reg_dt DESC, n.norm_title, n.report_id
+        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.report_date = d.report_date
+        ORDER BY n.report_date DESC, n.norm_title, n.report_id
     """
     
     rows = await conn.fetch(query)
     
     groups = {}
     for r in rows:
-        key = (r['norm_title'], r['reg_dt'])
+        key = (r['norm_title'], r['report_date'])
         if key not in groups:
             groups[key] = []
         groups[key].append(dict(r))
@@ -77,9 +77,9 @@ async def execute_ls_normalization():
                 if duplicate_meta and not survivor_meta:
                     # 이관: 생존자용 메타데이터 생성 (중복된 놈의 정보 기반)
                     await conn.execute(
-                        'INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, reg_dt) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+                        'INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, report_date) VALUES ($1,$2,$3,$4,$5,$6,$7)',
                         survivor['report_id'], duplicate_meta['firm_nm'], duplicate_meta['title'], duplicate_meta['file_path'], 
-                        duplicate_meta['file_size'], duplicate_meta['page_count'], duplicate_meta['reg_dt']
+                        duplicate_meta['file_size'], duplicate_meta['page_count'], duplicate_meta['report_date']
                     )
                     # 생존자 상태를 완료(2)로 변경
                     await conn.execute('UPDATE tbl_sec_reports SET sync_status = 2 WHERE report_id = $1', survivor['report_id'])

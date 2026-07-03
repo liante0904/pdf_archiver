@@ -22,7 +22,7 @@ async def execute_live_cleanup():
     print("[1] DB 데이터 인덱싱 중...")
     # 전수 조사 및 논리적 매핑 구축
     rows = await conn.fetch("""
-        SELECT report_id, firm_nm, article_title, reg_dt 
+        SELECT report_id, firm_nm, article_title, report_date 
         FROM tbl_sec_reports 
         WHERE firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%'
     """)
@@ -35,7 +35,7 @@ async def execute_live_cleanup():
         rid = int(r['report_id'])
         active_ids.add(rid)
         id_to_info[rid] = r
-        month = f"{r['reg_dt'][:4]}-{r['reg_dt'][4:6]}"
+        month = f"{r['report_date'][:4]}-{r['report_date'][4:6]}"
         ntitle = normalize_title(r['article_title'])
         key = (month, ntitle)
         if key not in logical_map or rid < logical_map[key]:
@@ -137,8 +137,8 @@ async def execute_live_cleanup():
                             # 메타데이터가 없으면 새로 생성 (필요시)
                             info = id_to_info.get(best_id)
                             if info:
-                                await conn.execute('INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, reg_dt) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
-                                                 best_id, info['firm_nm'], info['article_title'], f"{month}/LS증권/{new_name}", info['reg_dt'])
+                                await conn.execute('INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, report_date) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+                                                 best_id, info['firm_nm'], info['article_title'], f"{month}/LS증권/{new_name}", info['report_date'])
 
         print(f"  > {month} 처리 완료.")
 

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from utils import _is_pdf_payload, _pdf_hash_bytes, get_pdf_page_count, _find_mirae_board_download_url, _report_prefix, _truncate
 
-async def download_mirae_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+async def download_mirae_pdf(candidates, target_path, title, report_id, firm, report_date):
     if not candidates:
         return False
 
@@ -60,7 +60,7 @@ async def download_mirae_pdf(candidates, target_path, title, report_id, firm, re
             
             if proc.returncode == 0 and board_tmp.exists():
                 board_html = board_tmp.read_bytes()
-                fallback_url = _find_mirae_board_download_url(board_html, title, reg_dt)
+                fallback_url = _find_mirae_board_download_url(board_html, title, report_date)
                 if fallback_url and fallback_url not in candidate_urls:
                     cmd = [
                         "wget", "-q", "-O", str(tmp_path),
@@ -81,7 +81,7 @@ async def download_mirae_pdf(candidates, target_path, title, report_id, firm, re
     if body is None:
         logging.warning(
             "%s Mirae: download failed attempts=%s",
-            _report_prefix(firm, title, report_id, reg_dt),
+            _report_prefix(firm, title, report_id, report_date),
             attempted_urls,
         )
         return False
@@ -93,6 +93,6 @@ async def download_mirae_pdf(candidates, target_path, title, report_id, firm, re
     
     return {
         "report_id": report_id, "firm": firm, "title": title, "path": target_path,
-        "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+        "size": target_path.stat().st_size, "pages": pages, "report_date": report_date,
         "pdf_hash": _pdf_hash_bytes(body),
     }

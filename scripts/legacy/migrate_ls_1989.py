@@ -22,19 +22,19 @@ async def migrate_and_delete_ls():
         # 2. target(1989) 업데이트 (KEY, REG_DT 등 source의 정확한 정보로 덮어쓰기)
         await conn.execute("""
             UPDATE tbl_sec_reports 
-            SET key = $1, reg_dt = $2, "sync_status" = $3, "retry_count" = $4
+            SET key = $1, report_date = $2, "sync_status" = $3, "retry_count" = $4
             WHERE report_id = $5
-        """, source_row['key'], source_row['reg_dt'], source_row['sync_status'], source_row['retry_count'], target_id)
+        """, source_row['key'], source_row['report_date'], source_row['sync_status'], source_row['retry_count'], target_id)
         
         # 3. 메타데이터 이관 (혹시 source에 파일 정보가 있다면)
         source_meta = await conn.fetchrow('SELECT * FROM "tbl_sec_reports_pdf_archive" WHERE report_id = $1', source_id)
         if source_meta:
             await conn.execute("""
-                INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, reg_dt)
+                INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, report_date)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (report_id) DO UPDATE SET file_path = EXCLUDED.file_path
             """, target_id, source_meta['firm_nm'], source_meta['title'], source_meta['file_path'], 
-                source_meta['file_size'], source_meta['page_count'], source_meta['reg_dt'])
+                source_meta['file_size'], source_meta['page_count'], source_meta['report_date'])
         
         # 4. source(231728318) 삭제
         await conn.execute('DELETE FROM "tbl_sec_reports_pdf_archive" WHERE report_id = $1', source_id)

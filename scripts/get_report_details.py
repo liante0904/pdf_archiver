@@ -17,12 +17,12 @@ async def get_report_details(report_ids):
 
     for r_id in report_ids:
         row = await conn.fetchrow(
-            'SELECT report_id, firm_nm, article_title, reg_dt FROM tbl_sec_reports WHERE report_id = $1',
+            'SELECT report_id, firm_nm, article_title, report_date FROM tbl_sec_reports WHERE report_id = $1',
             r_id
         )
         if row:
             title = (row['article_title'][:37] + '..') if len(row['article_title']) > 37 else row['article_title']
-            print(f"{row['report_id']:<10} | {row['firm_nm']:<15} | {title:<40} | {row['reg_dt']}")
+            print(f"{row['report_id']:<10} | {row['firm_nm']:<15} | {title:<40} | {row['report_date']}")
         else:
             print(f"{r_id:<10} | Not found in TBL_SEC_REPORTS")
 

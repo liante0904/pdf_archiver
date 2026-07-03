@@ -189,8 +189,8 @@ def _safe_filename(title: str, max_len: int = 60) -> str:
     return safe
 
 
-def _make_path(firm: str, title: str, reg_dt: str, report_id: int) -> Path:
-    cd = re.sub(r'[^0-9]', '', str(reg_dt)) or "00000000"
+def _make_path(firm: str, title: str, report_date: str, report_id: int) -> Path:
+    cd = re.sub(r'[^0-9]', '', str(report_date)) or "00000000"
     ym = f"{cd[:4]}-{cd[4:6]}"
     fn = f"{cd[2:8]}_{_safe_filename(title)}_{report_id}.pdf"
     return LOCAL_DIR / ym / firm / fn
@@ -236,9 +236,9 @@ async def process_record(conn, rec: dict, dry_run: bool = False) -> dict | None:
     rid = rec["report_id"]
     firm = rec["firm_nm"]
     title = str(rec.get("article_title") or "")
-    reg_dt = str(rec.get("reg_dt") or "")
+    report_date = str(rec.get("report_date") or "")
 
-    target_path = _make_path(firm, title, reg_dt, rid)
+    target_path = _make_path(firm, title, report_date, rid)
 
     # 이미 다운로드 성공했으면 skip
     if target_path.exists() and target_path.stat().st_size > 1024 and _is_pdf(target_path.read_bytes()):
@@ -332,10 +332,10 @@ async def main():
         where_sql = " AND ".join(where_clauses)
         query = f"""
             SELECT report_id, firm_nm, article_title, pdf_url, report_unique_key,
-                   telegram_url, download_url, reg_dt
+                   telegram_url, download_url, report_date
             FROM tbl_sec_reports
             WHERE {where_sql}
-            ORDER BY reg_dt DESC
+            ORDER BY report_date DESC
             LIMIT {args.limit}
         """
 

@@ -22,7 +22,7 @@ async def emergency_reset_status():
         UPDATE tbl_sec_reports 
         SET sync_status = 3, retry_count = 0
         WHERE (firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%')
-          AND reg_dt LIKE '202101%'
+          AND report_date LIKE '202101%'
     """)
     
     print(f"2021년 1월 LS/이베스트 리포트 {result}건을 재처리 대기(Status 3)로 변경했습니다.")
@@ -33,7 +33,7 @@ async def emergency_reset_status():
         UPDATE tbl_sec_reports 
         SET sync_status = 3, retry_count = 0
         WHERE (firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%')
-          AND reg_dt LIKE '2021%'
+          AND report_date LIKE '2021%'
           AND sync_status = 2
     """)
     

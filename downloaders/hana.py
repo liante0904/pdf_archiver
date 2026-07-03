@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 from .base import BaseDownloader
 from utils import _browser_like_headers, _cookie_header_from_response, _is_pdf_payload, _pdf_hash_bytes, get_pdf_page_count, _report_prefix, _truncate
 
-async def download_hana_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+async def download_hana_pdf(candidates, target_path, title, report_id, firm, report_date):
     """하나증권 전용 다운로드.
     게시판 목록 페이지에서 현재 유효한 다운로드 URL을 찾아 다운로드한다.
     """
@@ -41,7 +41,7 @@ async def download_hana_pdf(candidates, target_path, title, report_id, firm, reg
             pages = await get_pdf_page_count(target_path)
             return {
                 "report_id": report_id, "firm": firm, "title": title, "path": target_path,
-                "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+                "size": target_path.stat().st_size, "pages": pages, "report_date": report_date,
                 "pdf_hash": _pdf_hash_bytes(raw_body),
             }
 
@@ -74,7 +74,7 @@ async def download_hana_pdf(candidates, target_path, title, report_id, firm, reg
         if not pdf_url:
             logging.warning(
                 "%s 하나증권: board page에서 PDF URL을 찾을 수 없음 board_url=%s",
-                _report_prefix(firm, title, report_id, reg_dt),
+                _report_prefix(firm, title, report_id, report_date),
                 _truncate(board_url, 160),
             )
             return None
@@ -101,13 +101,13 @@ async def download_hana_pdf(candidates, target_path, title, report_id, firm, reg
         pages = await get_pdf_page_count(target_path)
         return {
             "report_id": report_id, "firm": firm, "title": title, "path": target_path,
-            "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+            "size": target_path.stat().st_size, "pages": pages, "report_date": report_date,
             "pdf_hash": _pdf_hash_bytes(body),
         }
     except Exception as e:
         logging.warning(
             "%s 하나증권 다운로드 예외: %s: %r",
-            _report_prefix(firm, title, report_id, reg_dt),
+            _report_prefix(firm, title, report_id, report_date),
             type(e).__name__, e,
         )
         return None

@@ -53,7 +53,7 @@ def _extract_report_id(path: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _month_from_reg_dt(value: object) -> str:
+def _month_from_report_date(value: object) -> str:
     text = "".join(ch for ch in str(value or "") if ch.isdigit())
     if len(text) < 6:
         return ""
@@ -78,7 +78,7 @@ async def _fetch_db_rows() -> list[dict]:
                 s.report_id,
                 s.firm_nm,
                 s.article_title AS title,
-                s.reg_dt::text AS reg_dt,
+                s.report_date::text AS report_date,
                 encode(s.pdf_hash, 'hex') AS pdf_hash_hex,
                 s.pdf_url,
                 COALESCE(s.pdf_sync_status, 0) AS source_pdf_sync_status,
@@ -122,7 +122,7 @@ async def _fetch_pdf_url_duplicate_rows() -> list[dict]:
                 s.report_id,
                 s.firm_nm,
                 s.article_title AS title,
-                s.reg_dt::text AS reg_dt,
+                s.report_date::text AS report_date,
                 encode(s.pdf_hash, 'hex') AS pdf_hash_hex,
                 NULLIF(BTRIM(s.pdf_url), '') AS pdf_url_key,
                 d.group_count,
@@ -222,7 +222,7 @@ def _choose_survivor(rows: list[dict], remote_by_id: dict[int, list[dict]], poli
         return 0 if done else 1
 
     if policy == "newest-reg-dt":
-        return sorted(rows, key=lambda r: (has_remote(r), is_done(r), str(r.get("reg_dt") or ""), int(r["report_id"])))[-1]
+        return sorted(rows, key=lambda r: (has_remote(r), is_done(r), str(r.get("report_date") or ""), int(r["report_id"])))[-1]
     return sorted(rows, key=lambda r: (has_remote(r), is_done(r), int(r["report_id"])))[0]
 
 
@@ -293,7 +293,7 @@ def build_plan(db_rows: list[dict], remote_by_id: dict[int, list[dict]], all_fil
                 "canonical_remote_path": canonical_path,
                 "canonical_firm_nm": survivor.get("firm_nm") or "",
                 "canonical_title": survivor.get("title") or "",
-                "canonical_reg_dt": survivor.get("reg_dt") or "",
+                "canonical_report_date": survivor.get("report_date") or "",
             }
         )
 
@@ -367,13 +367,13 @@ def build_pdf_url_plan(rows: list[dict], remote_by_id: dict[int, list[dict]]) ->
                 "canonical_remote_path": canonical_path,
                 "canonical_firm_nm": survivor.get("firm_nm") or "",
                 "canonical_title": survivor.get("title") or "",
-                "canonical_reg_dt": survivor.get("reg_dt") or "",
+                "canonical_report_date": survivor.get("report_date") or "",
                 "canonical_pdf_hash_hex": survivor.get("pdf_hash_hex") or "",
             }
         )
 
         for row in items:
-            month = _month_from_reg_dt(row.get("reg_dt"))
+            month = _month_from_report_date(row.get("report_date"))
             firm = str(row.get("firm_nm") or "").strip()
             if month and firm:
                 scope_prefixes.add(f"{month}/{firm}")
@@ -470,7 +470,7 @@ async def main() -> None:
 
     _write_csv(
         output_dir / "db_duplicate_groups.csv",
-        ["pdf_hash_hex", "group_count", "canonical_report_id", "canonical_remote_path", "canonical_firm_nm", "canonical_title", "canonical_reg_dt"],
+        ["pdf_hash_hex", "group_count", "canonical_report_id", "canonical_remote_path", "canonical_firm_nm", "canonical_title", "canonical_report_date"],
         plan["db_duplicate_groups"],
     )
     _write_csv(
@@ -491,7 +491,7 @@ async def main() -> None:
     if pdf_url_plan:
         _write_csv(
             output_dir / "pdf_url_duplicate_groups.csv",
-            ["pdf_url", "group_count", "canonical_report_id", "canonical_remote_path", "canonical_firm_nm", "canonical_title", "canonical_reg_dt", "canonical_pdf_hash_hex"],
+            ["pdf_url", "group_count", "canonical_report_id", "canonical_remote_path", "canonical_firm_nm", "canonical_title", "canonical_report_date", "canonical_pdf_hash_hex"],
             pdf_url_plan["pdf_url_duplicate_groups"],
         )
         _write_csv(

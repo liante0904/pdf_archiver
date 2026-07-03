@@ -38,7 +38,7 @@ async def migrate_status_2():
     # file_path가 없더라도 우선 메타데이터 확보를 위해 이관 (필요시 'N/A' 또는 NULL 처리)
     insert_query = f"""
         INSERT INTO {PDF_ARCHIVE_TABLE} (
-            report_id, firm_nm, title, file_path, file_size, page_count, reg_dt,
+            report_id, firm_nm, title, file_path, file_size, page_count, report_date,
             pdf_sync_status, sync_status, retry_count
         )
         SELECT 
@@ -48,7 +48,7 @@ async def migrate_status_2():
             COALESCE(archive_path, pdf_url, 'N/A'), 
             0, 
             0, 
-            reg_dt,
+            report_date,
             2,
             2,
             0

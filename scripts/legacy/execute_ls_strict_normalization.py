@@ -26,7 +26,7 @@ async def execute_ls_strict_normalization():
     
     # 1. 모든 LS/이베스트 레코드 가져오기
     query = """
-        SELECT report_id, reg_dt, key, firm_nm, article_title, "sync_status"
+        SELECT report_id, report_date, key, firm_nm, article_title, "sync_status"
         FROM tbl_sec_reports
         WHERE (firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%')
     """
@@ -43,7 +43,7 @@ async def execute_ls_strict_normalization():
             continue
             
         # 그룹 키: (제목, 날짜, 게시판번호, 게시물번호)
-        group_key = (norm_title, r['reg_dt'], b_no, b_seq)
+        group_key = (norm_title, r['report_date'], b_no, b_seq)
         
         if group_key not in groups:
             groups[group_key] = []
@@ -88,9 +88,9 @@ async def execute_ls_strict_normalization():
                 
                 if duplicate_meta and not survivor_meta:
                     await conn.execute(
-                        'INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, reg_dt) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+                        'INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, report_date) VALUES ($1,$2,$3,$4,$5,$6,$7)',
                         survivor['report_id'], duplicate_meta['firm_nm'], duplicate_meta['title'], duplicate_meta['file_path'], 
-                        duplicate_meta['file_size'], duplicate_meta['page_count'], duplicate_meta['reg_dt']
+                        duplicate_meta['file_size'], duplicate_meta['page_count'], duplicate_meta['report_date']
                     )
                     await conn.execute('UPDATE tbl_sec_reports SET sync_status = 2 WHERE report_id = $1', survivor['report_id'])
 

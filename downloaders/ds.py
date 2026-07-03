@@ -2,7 +2,7 @@ import aiohttp
 from .base import BaseDownloader
 from utils import _browser_like_headers, _is_pdf_payload, _pdf_hash_bytes, get_pdf_page_count
 
-async def download_ds_pdf(source_url, target_path, title, report_id, firm, reg_dt, referer_hint=None):
+async def download_ds_pdf(source_url, target_path, title, report_id, firm, report_date, referer_hint=None):
     if not source_url:
         return False
 
@@ -43,7 +43,7 @@ async def download_ds_pdf(source_url, target_path, title, report_id, firm, reg_d
         pages = await get_pdf_page_count(target_path)
         return {
             "report_id": report_id, "firm": firm, "title": title, "path": target_path,
-            "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+            "size": target_path.stat().st_size, "pages": pages, "report_date": report_date,
             "pdf_hash": _pdf_hash_bytes(body),
         }
     except Exception:

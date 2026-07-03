@@ -69,8 +69,8 @@ def _safe_filename(title: str, max_len: int = 60) -> str:
     return safe
 
 
-def _make_path(firm: str, title: str, reg_dt: str, report_id: int) -> Path:
-    cd = re.sub(r'[^0-9]', '', str(reg_dt)) or "00000000"
+def _make_path(firm: str, title: str, report_date: str, report_id: int) -> Path:
+    cd = re.sub(r'[^0-9]', '', str(report_date)) or "00000000"
     ym = f"{cd[:4]}-{cd[4:6]}"
     fn = f"{cd[2:8]}_{_safe_filename(title)}_{report_id}.pdf"
     return LOCAL_DIR / ym / firm / fn
@@ -157,8 +157,8 @@ async def process_one(rec: dict) -> dict | None:
     rid = int(rec["report_id"])
     firm = rec["firm_nm"]
     title = str(rec.get("article_title") or "")
-    reg_dt = str(rec.get("reg_dt") or "")
-    target = _make_path(firm, title, reg_dt, rid)
+    report_date = str(rec.get("report_date") or "")
+    target = _make_path(firm, title, report_date, rid)
 
     # 이미 있으면 skip
     if target.exists() and target.stat().st_size > 1024 and _is_pdf(target.read_bytes()):
@@ -194,7 +194,7 @@ def _mk_payload(rec: dict, path: Path, body: bytes) -> dict:
         "report_id": int(rec["report_id"]),
         "firm_nm": rec["firm_nm"],
         "title": str(rec.get("article_title") or ""),
-        "reg_dt": str(rec.get("reg_dt") or ""),
+        "report_date": str(rec.get("report_date") or ""),
         "pdf_url": str(rec.get("pdf_url") or ""),
         "download_url": str(rec.get("download_url") or ""),
         "telegram_url": str(rec.get("telegram_url") or ""),
@@ -307,14 +307,14 @@ def update_db(payloads: list[dict]):
 
         _sql_exec(f"""
             INSERT INTO tbl_sec_reports_pdf_archive (
-                report_id, firm_nm, title, reg_dt, pdf_url,
+                report_id, firm_nm, title, report_date, pdf_url,
                 pdf_hash, storage_backend, storage_key,
                 download_url, telegram_url, key,
                 archive_status, file_name, download_status_yn,
                 file_path, file_size, page_count,
                 pdf_sync_status, created_at, updated_at, retry_count
             ) VALUES (
-                {p['report_id']}, {_sq(p['firm_nm'])}, {_sq(p['title'])}, {_sq(p['reg_dt'])}, {_sq(p['pdf_url'])},
+                {p['report_id']}, {_sq(p['firm_nm'])}, {_sq(p['title'])}, {_sq(p['report_date'])}, {_sq(p['pdf_url'])},
                 {_hex2bytea(p['pdf_hash_hex'])}, 'onedrive', {_sq(sk)},
                 {_sq(p['download_url'])}, {_sq(p['telegram_url'])}, {_sq(p['report_unique_key'])},
                 'ARCHIVED', {_sq(fn)}, 'Y',
@@ -348,10 +348,10 @@ async def main():
     log.info("=" * 60)
 
     all_rows = _fetch_json("""
-        SELECT report_id, firm_nm, article_title, pdf_url, report_unique_key, download_url, telegram_url, reg_dt
+        SELECT report_id, firm_nm, article_title, pdf_url, report_unique_key, download_url, telegram_url, report_date
         FROM tbl_sec_reports
         WHERE firm_nm LIKE '%LS%' AND pdf_sync_status = 3
-        ORDER BY reg_dt DESC
+        ORDER BY report_date DESC
     """)
     total = len(all_rows)
     log.info(f"대상: {total}건")

@@ -53,8 +53,8 @@ def _is_pdf_payload(data: bytes):
         return True
     return False
 
-def _report_prefix(firm, title, report_id, reg_dt=None):
-    return f"[{firm} | {title} | report_id={report_id}" + (f" | reg_dt={reg_dt}]" if reg_dt else "]")
+def _report_prefix(firm, title, report_id, report_date=None):
+    return f"[{firm} | {title} | report_id={report_id}" + (f" | report_date={report_date}]" if report_date else "]")
 
 def _download_sources_for_firm(key_url, pdf_url, tel_url, dw_url):
     sources = [u for u in (pdf_url, tel_url, dw_url, key_url) if u and str(u).startswith("http")]
@@ -254,7 +254,7 @@ def _normalize_match_text(value):
     normalized = unicodedata.normalize("NFC", html.unescape(value or "")).lower()
     return re.sub(r"[^0-9a-z가-힣]+", "", normalized)
 
-def _find_mirae_board_download_url(board_body, title, reg_dt):
+def _find_mirae_board_download_url(board_body, title, report_date):
     board_html = _decode_mirae_html(board_body)
     target = _normalize_match_text(title)
     if not target:
@@ -262,7 +262,7 @@ def _find_mirae_board_download_url(board_body, title, reg_dt):
 
     code_match = re.search(r"\((\d{6})", title or "")
     stock_code = code_match.group(1) if code_match else ""
-    date_key = re.sub(r"[^0-9]", "", str(reg_dt or ""))[:8]
+    date_key = re.sub(r"[^0-9]", "", str(report_date or ""))[:8]
     best_url = None
     best_score = 0.0
     first_token = re.split(r"[\s(/\[]+", title or "", maxsplit=1)[0]

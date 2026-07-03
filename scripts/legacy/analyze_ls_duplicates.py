@@ -10,18 +10,18 @@ async def analyze_ls_duplicates():
     # LS증권과 이베스트 투자증권 대상
     query = """
         WITH dup_groups AS (
-            SELECT firm_nm, article_title, reg_dt, COUNT(*) as group_count
+            SELECT firm_nm, article_title, report_date, COUNT(*) as group_count
             FROM tbl_sec_reports
             WHERE firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%'
-            GROUP BY firm_nm, article_title, reg_dt
+            GROUP BY firm_nm, article_title, report_date
             HAVING COUNT(*) > 1
         )
-        SELECT r.report_id, r.firm_nm, r.article_title, r.reg_dt, r.key, r.sync_status
+        SELECT r.report_id, r.firm_nm, r.article_title, r.report_date, r.key, r.sync_status
         FROM tbl_sec_reports r
         INNER JOIN dup_groups d ON r.firm_nm = d.firm_nm 
                                AND r.article_title = d.article_title 
-                               AND r.reg_dt = d.reg_dt
-        ORDER BY r.reg_dt DESC, r.article_title
+                               AND r.report_date = d.report_date
+        ORDER BY r.report_date DESC, r.article_title
     """
     
     rows = await conn.fetch(query)
@@ -34,10 +34,10 @@ async def analyze_ls_duplicates():
         current_group = None
         group_count = 0
         for r in rows:
-            group_key = (r['firm_nm'], r['article_title'], r['reg_dt'])
+            group_key = (r['firm_nm'], r['article_title'], r['report_date'])
             if group_key != current_group:
                 if group_count >= 5: break
-                print(f"\n그룹: {r['reg_dt']} | {r['firm_nm']} | {r['article_title']}")
+                print(f"\n그룹: {r['report_date']} | {r['firm_nm']} | {r['article_title']}")
                 current_group = group_key
                 group_count += 1
             print(f"  - ID: {r['report_id']} | KEY: {r['key'][:50]}... | Status: {r['sync_status']}")

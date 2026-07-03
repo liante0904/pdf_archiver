@@ -21,7 +21,7 @@ async def handle_remaining_records():
     print(f"\nSearching for duplicates of: {target_title}")
     
     query = """
-        SELECT report_id, reg_dt, key, "sync_status"
+        SELECT report_id, report_date, key, "sync_status"
         FROM tbl_sec_reports
         WHERE LOWER(REGEXP_REPLACE(article_title, '\s+', '', 'g')) = $1
     """
@@ -30,7 +30,7 @@ async def handle_remaining_records():
     if matches:
         print(f"Found {len(matches)} matching records:")
         for m in matches:
-            print(f" - ID: {m['report_id']} | Date: {m['reg_dt']} | Status: {m['sync_status']} | KEY: {m['key']}")
+            print(f" - ID: {m['report_id']} | Date: {m['report_date']} | Status: {m['sync_status']} | KEY: {m['key']}")
             
         # 1989 외에 다른 ID가 있다면 1989 삭제 제안
         if len(matches) > 1:

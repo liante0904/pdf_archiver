@@ -28,18 +28,18 @@ async def migrate_and_delete_ls_v2():
         # 3. target(1989) 업데이트
         await conn.execute("""
             UPDATE tbl_sec_reports 
-            SET key = $1, reg_dt = $2, "sync_status" = $3, "retry_count" = $4
+            SET key = $1, report_date = $2, "sync_status" = $3, "retry_count" = $4
             WHERE report_id = $5
-        """, source_row['key'], source_row['reg_dt'], source_row['sync_status'], source_row['retry_count'], target_id)
+        """, source_row['key'], source_row['report_date'], source_row['sync_status'], source_row['retry_count'], target_id)
         
         # 4. 메타데이터 이관
         if source_meta:
             await conn.execute("""
-                INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, reg_dt)
+                INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, report_date)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (report_id) DO UPDATE SET file_path = EXCLUDED.file_path
             """, target_id, source_meta['firm_nm'], source_meta['title'], source_meta['file_path'], 
-                source_meta['file_size'], source_meta['page_count'], source_meta['reg_dt'])
+                source_meta['file_size'], source_meta['page_count'], source_meta['report_date'])
         
     print("Migration and deletion (V2) completed successfully.")
     await conn.close()

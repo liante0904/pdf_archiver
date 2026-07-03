@@ -15,7 +15,7 @@ DOWNLOAD_GATE_RE = re.compile(
 )
 
 
-async def download_meritz_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+async def download_meritz_pdf(candidates, target_path, title, report_id, firm, report_date):
     """메리츠증권: BbsRead.go → PDF 링크 추출 → Referer 다운로드"""
     tmp_path = target_path.with_suffix(".tmp")
 
@@ -90,7 +90,7 @@ async def download_meritz_pdf(candidates, target_path, title, report_id, firm, r
                 "report_id": report_id, "firm": firm, "title": title,
                 "path": target_path,
                 "size": target_path.stat().st_size, "pages": pages,
-                "reg_dt": reg_dt, "pdf_hash": _pdf_hash_bytes(body),
+                "report_date": report_date, "pdf_hash": _pdf_hash_bytes(body),
             }
         except Exception as e:
             log.warning("메리츠: report_id=%s download 예외: %s", report_id, e)

@@ -17,7 +17,7 @@ async def surgical_monthly_scan():
     print("[1/3] DB 데이터 로드 및 월별 인덱싱 중...")
     # LS/이베스트 전수 조사
     rows = await conn.fetch("""
-        SELECT report_id, firm_nm, article_title, reg_dt 
+        SELECT report_id, firm_nm, article_title, report_date 
         FROM tbl_sec_reports 
         WHERE firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%'
     """)
@@ -29,8 +29,8 @@ async def surgical_monthly_scan():
     
     for r in rows:
         rid = int(r['report_id'])
-        reg_dt = r['reg_dt'] # YYYYMMDD
-        month = f"{reg_dt[:4]}-{reg_dt[4:6]}" # YYYY-MM
+        report_date = r['report_date'] # YYYYMMDD
+        month = f"{report_date[:4]}-{report_date[4:6]}" # YYYY-MM
         
         db_by_month[month]['ids'].add(rid)
         

@@ -120,7 +120,7 @@ class TestRcloneRepair(unittest.IsolatedAsyncioTestCase):
                     "download_url": "",
                     "firm_nm": "하나증권",
                     "title": "sample",
-                    "reg_dt": "20171019",
+                    "report_date": "20171019",
                     "path": local_path,
                     "size": local_path.stat().st_size,
                     "pages": 1,
@@ -227,7 +227,7 @@ class TestFetchPolicy(unittest.TestCase):
 
         self.assertIn("ROW_NUMBER() OVER", query)
         self.assertIn("PARTITION BY firm_nm", query)
-        self.assertIn("ORDER BY firm_rank, reg_dt DESC, firm_nm, report_id DESC", query)
+        self.assertIn("ORDER BY firm_rank, report_date DESC, firm_nm, report_id DESC", query)
         self.assertIn(f"LIMIT {archiver.Config.BATCH_SIZE}", query)
         self.assertIn(f"< {archiver.Config.FETCH_RETRY_LIMIT}", query)
         self.assertNotIn("firm_nm = 'LS증권'", query)
@@ -259,7 +259,7 @@ class TestWorkflowUpdates(unittest.IsolatedAsyncioTestCase):
             "download_url": "",
             "firm_nm": "테스트증권",
             "title": "sample",
-            "reg_dt": "20260509",
+            "report_date": "20260509",
             "path": Path("/tmp/sample.pdf"),
             "size": 123,
             "pages": 1,
@@ -317,7 +317,7 @@ class TestDbfiDownload(unittest.IsolatedAsyncioTestCase):
                     title="DBfi Test",
                     report_id="233375322",
                     firm="DB증권",
-                    reg_dt="20260422",
+                    report_date="20260422",
                 )
 
             self.assertIsNotNone(result)
@@ -348,7 +348,7 @@ class TestDbfiDownload(unittest.IsolatedAsyncioTestCase):
             "20260422",
         )
 
-        async def fake_download(source_url, target_path, title, report_id, firm, reg_dt):
+        async def fake_download(source_url, target_path, title, report_id, firm, report_date):
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_bytes(b"%PDF-1.4\n" + (b"dbfi-pdf-content\n" * 128))
             return {
@@ -358,7 +358,7 @@ class TestDbfiDownload(unittest.IsolatedAsyncioTestCase):
                 "path": target_path,
                 "size": target_path.stat().st_size,
                 "pages": 7,
-                "reg_dt": reg_dt,
+                "report_date": report_date,
             }
 
         download_mock = AsyncMock(side_effect=fake_download)
@@ -410,7 +410,7 @@ class TestDbfiDownload(unittest.IsolatedAsyncioTestCase):
                     title="DBfi Test",
                     report_id="123",
                     firm="DB증권",
-                    reg_dt="20260422",
+                    report_date="20260422",
                 )
 
             self.assertIsNotNone(result)

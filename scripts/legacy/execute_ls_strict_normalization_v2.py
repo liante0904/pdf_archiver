@@ -20,7 +20,7 @@ async def execute_ls_strict_normalization_v2():
     conn = await asyncpg.connect(postgres_url)
     
     # 1. 모든 LS/이베스트 레코드 가져오기
-    rows = await conn.fetch('SELECT report_id, key, article_title, reg_dt FROM tbl_sec_reports WHERE (firm_nm LIKE \'%LS%\' OR firm_nm LIKE \'%이베스트%\')')
+    rows = await conn.fetch('SELECT report_id, key, article_title, report_date FROM tbl_sec_reports WHERE (firm_nm LIKE \'%LS%\' OR firm_nm LIKE \'%이베스트%\')')
     
     # 2. 그룹화 (정규화된 KEY 기준)
     # (제목_정규화, 날짜, board_no, board_seq)
@@ -30,7 +30,7 @@ async def execute_ls_strict_normalization_v2():
         b_no, b_seq = get_url_params(r['key'])
         if not b_no or not b_seq: continue
         
-        group_key = (norm_title, r['reg_dt'], b_no, b_seq)
+        group_key = (norm_title, r['report_date'], b_no, b_seq)
         if group_key not in groups: groups[group_key] = []
         groups[group_key].append(dict(r))
 
@@ -56,9 +56,9 @@ async def execute_ls_strict_normalization_v2():
             if duplicate_meta:
                 survivor_meta = await conn.fetchrow('SELECT report_id FROM "tbl_sec_reports_pdf_archive" WHERE report_id = $1', survivor_id)
                 if not survivor_meta:
-                    await conn.execute('INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, reg_dt) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+                    await conn.execute('INSERT INTO "tbl_sec_reports_pdf_archive" (report_id, firm_nm, title, file_path, file_size, page_count, report_date) VALUES ($1,$2,$3,$4,$5,$6,$7)',
                         survivor_id, duplicate_meta['firm_nm'], duplicate_meta['title'], duplicate_meta['file_path'], 
-                        duplicate_meta['file_size'], duplicate_meta['page_count'], duplicate_meta['reg_dt'])
+                        duplicate_meta['file_size'], duplicate_meta['page_count'], duplicate_meta['report_date'])
                     await conn.execute('UPDATE tbl_sec_reports SET sync_status = 2 WHERE report_id = $1', survivor_id)
             
             await conn.execute('DELETE FROM "tbl_sec_reports_pdf_archive" WHERE report_id = $1', d_id)

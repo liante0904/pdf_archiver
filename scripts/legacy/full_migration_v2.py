@@ -100,12 +100,12 @@ async def migrate():
         print(f"Migration result: {result}")
 
         # 3. 불필요한 중복 컬럼 제거 (정규화)
-        print("Removing redundant columns (firm_nm, title, reg_dt) from archive table...")
+        print("Removing redundant columns (firm_nm, title, report_date) from archive table...")
         await conn.execute(f"""
             ALTER TABLE {PDF_ARCHIVE_TABLE} 
             DROP COLUMN IF EXISTS "firm_nm",
             DROP COLUMN IF EXISTS "title",
-            DROP COLUMN IF EXISTS "reg_dt";
+            DROP COLUMN IF EXISTS "report_date";
         """)
 
         print("Finalizing...")

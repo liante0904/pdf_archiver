@@ -14,7 +14,7 @@ async def precision_ls_duplicate_check():
         WITH normalized_reports AS (
             SELECT 
                 report_id,
-                reg_dt,
+                report_date,
                 key,
                 sync_status,
                 -- 제목 정규화: 공백 제거, 소문자화
@@ -25,16 +25,16 @@ async def precision_ls_duplicate_check():
             WHERE firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%'
         ),
         dup_groups AS (
-            SELECT norm_title, reg_dt, COUNT(*) as cnt
+            SELECT norm_title, report_date, COUNT(*) as cnt
             FROM normalized_reports
-            GROUP BY norm_title, reg_dt
+            GROUP BY norm_title, report_date
             HAVING COUNT(*) > 1
         )
             SELECT 
-            n.report_id, n.reg_dt, n.firm_nm, n.article_title, n.key, n.sync_status
+            n.report_id, n.report_date, n.firm_nm, n.article_title, n.key, n.sync_status
         FROM normalized_reports n
-        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.reg_dt = d.reg_dt
-        ORDER BY n.reg_dt DESC, n.norm_title
+        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.report_date = d.report_date
+        ORDER BY n.report_date DESC, n.norm_title
     """
     
     rows = await conn.fetch(query)
@@ -44,7 +44,7 @@ async def precision_ls_duplicate_check():
     for r in rows:
         # 제목 정규화하여 그룹 식별
         ntitle = re.sub(r'\s+', '', r['article_title']).lower()
-        group_set.add((ntitle, r['reg_dt']))
+        group_set.add((ntitle, r['report_date']))
     
     print(f"--- LS/이베스트 정밀 중복 분석 ---")
     print(f"1. 중복 의심 레코드 총수: {len(rows)}건")
@@ -57,10 +57,10 @@ async def precision_ls_duplicate_check():
         last_group = None
         for r in rows:
             ntitle = re.sub(r'\s+', '', r['article_title']).lower()
-            current_group = (ntitle, r['reg_dt'])
+            current_group = (ntitle, r['report_date'])
             if current_group != last_group:
                 if count >= 3: break
-                print(f"\n[날짜: {r['reg_dt']}] {r['article_title']}")
+                print(f"\n[날짜: {r['report_date']}] {r['article_title']}")
                 last_group = current_group
                 count += 1
             print(f"  - ID: {r['report_id']} | Status: {r['sync_status']} | Firm: {r['firm_nm']}")

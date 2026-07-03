@@ -58,7 +58,7 @@ async def extract_dbfi_pdf_meta(session, encoded_url):
             return {"viewer_url": "https://whub.dbsec.co.kr/pv/viewer", "doc_id": doc_id, "pdf_url": pdf_url}
     except Exception: return None
 
-async def download_dbfi_pdf(candidates, target_path, title, report_id, firm, reg_dt):
+async def download_dbfi_pdf(candidates, target_path, title, report_id, firm, report_date):
     # candidates에서 최적 URL 선택: appData > pv/gate > streamdocs
     key_url = None
     for u in (candidates or []):
@@ -146,7 +146,7 @@ async def download_dbfi_pdf(candidates, target_path, title, report_id, firm, reg
             pages = await get_pdf_page_count(target_path)
             return {
                 "report_id": report_id, "firm": firm, "title": title, "path": target_path,
-                "size": target_path.stat().st_size, "pages": pages, "reg_dt": reg_dt,
+                "size": target_path.stat().st_size, "pages": pages, "report_date": report_date,
                 "pdf_hash": _pdf_hash_bytes(body),
             }
         except Exception: return False

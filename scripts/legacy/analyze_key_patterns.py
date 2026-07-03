@@ -14,20 +14,20 @@ async def analyze_key_patterns():
     query = """
         WITH normalized_reports AS (
             SELECT 
-                report_id, reg_dt, key, firm_nm, article_title,
+                report_id, report_date, key, firm_nm, article_title,
                 LOWER(REGEXP_REPLACE(article_title, '\s+', '', 'g')) as norm_title
             FROM tbl_sec_reports
             WHERE firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%'
         ),
         dup_groups AS (
-            SELECT norm_title, reg_dt
+            SELECT norm_title, report_date
             FROM normalized_reports
-            GROUP BY norm_title, reg_dt
+            GROUP BY norm_title, report_date
             HAVING COUNT(*) > 1
         )
         SELECT n.* FROM normalized_reports n
-        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.reg_dt = d.reg_dt
-        ORDER BY n.reg_dt DESC, n.norm_title, n.report_id
+        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.report_date = d.report_date
+        ORDER BY n.report_date DESC, n.norm_title, n.report_id
     """
     
     rows = await conn.fetch(query)
@@ -39,7 +39,7 @@ async def analyze_key_patterns():
     group_rows = []
     
     for r in rows:
-        group_id = (r['norm_title'], r['reg_dt'])
+        group_id = (r['norm_title'], r['report_date'])
         if group_id != current_group_key:
             if group_rows:
                 # 그룹 내 KEY 차이 분석
@@ -59,7 +59,7 @@ async def analyze_key_patterns():
                 
                 patterns.append({
                     "title": group_rows[0]['article_title'],
-                    "date": group_rows[0]['reg_dt'],
+                    "date": group_rows[0]['report_date'],
                     "keys": keys
                 })
             

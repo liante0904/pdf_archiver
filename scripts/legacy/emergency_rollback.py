@@ -13,7 +13,7 @@ async def emergency_rollback():
         UPDATE tbl_sec_reports 
         SET sync_status = 2
         WHERE (firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%')
-          AND reg_dt LIKE '2021%'
+          AND report_date LIKE '2021%'
           AND sync_status = 3
     """)
     print(f"롤백 완료: {result_revert}건을 다시 정상(Status 2)으로 되돌렸습니다.")

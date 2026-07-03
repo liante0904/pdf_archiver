@@ -21,7 +21,7 @@ async def analyze_pdf_hash_duplicates():
                 r.report_id,
                 r.firm_nm,
                 r.article_title,
-                r.reg_dt,
+                r.report_date,
                 r.report_unique_key,
                 r.pdf_url,
                 encode(r.pdf_hash, 'hex') AS pdf_hash_hex,
@@ -31,7 +31,7 @@ async def analyze_pdf_hash_duplicates():
             FROM tbl_sec_reports r
             JOIN dup_groups d
               ON r.pdf_hash = decode(d.pdf_hash_hex, 'hex')
-            ORDER BY d.pdf_hash_hex, r.reg_dt DESC, r.report_id ASC
+            ORDER BY d.pdf_hash_hex, r.report_date DESC, r.report_id ASC
         """
 
         rows = await conn.fetch(query)
@@ -55,7 +55,7 @@ async def analyze_pdf_hash_duplicates():
             for item in items:
                 marker = "KEEP" if item["report_id"] == survivor["report_id"] else "DROP?"
                 print(
-                    f"  - {marker} ID={item['report_id']} | reg_dt={item['reg_dt']} | firm={item['firm_nm']} | "
+                    f"  - {marker} ID={item['report_id']} | report_date={item['report_date']} | firm={item['firm_nm']} | "
                     f"report_unique_key={item['report_unique_key']} | pdf_url={item['pdf_url']} | download_url={item['download_url']} | telegram_url={item['telegram_url']}"
                 )
 

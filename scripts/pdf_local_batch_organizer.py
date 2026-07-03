@@ -130,8 +130,8 @@ class PDFLocalBatchOrganizer:
             if not metadata:
                 return
 
-            firm, title, reg_dt, r_id = metadata
-            clean_dt = re.sub(r'[^0-9]', '', str(reg_dt)) if reg_dt else "00000000"
+            firm, title, report_date, r_id = metadata
+            clean_dt = re.sub(r'[^0-9]', '', str(report_date)) if report_date else "00000000"
             y_m = f"{clean_dt[:4]}-{clean_dt[4:6]}"
             yy_mm_dd = clean_dt[2:8]
             clean_title = self._clean_title(title)

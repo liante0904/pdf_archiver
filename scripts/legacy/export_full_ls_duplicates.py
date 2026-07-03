@@ -11,20 +11,20 @@ async def export_full_ls_duplicates():
     query = """
         WITH normalized_reports AS (
             SELECT 
-                report_id, reg_dt, key, firm_nm, article_title, "sync_status",
+                report_id, report_date, key, firm_nm, article_title, "sync_status",
                 LOWER(REGEXP_REPLACE(article_title, '\s+', '', 'g')) as norm_title
             FROM tbl_sec_reports
             WHERE (firm_nm LIKE '%LS%' OR firm_nm LIKE '%이베스트%')
         ),
         dup_groups AS (
-            SELECT norm_title, reg_dt
+            SELECT norm_title, report_date
             FROM normalized_reports
-            GROUP BY norm_title, reg_dt
+            GROUP BY norm_title, report_date
             HAVING COUNT(*) > 1
         )
         SELECT n.* FROM normalized_reports n
-        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.reg_dt = d.reg_dt
-        ORDER BY n.reg_dt DESC, n.norm_title, n.report_id
+        JOIN dup_groups d ON n.norm_title = d.norm_title AND n.report_date = d.report_date
+        ORDER BY n.report_date DESC, n.norm_title, n.report_id
     """
     
     rows = await conn.fetch(query)
@@ -34,10 +34,10 @@ async def export_full_ls_duplicates():
     
     current_group_key = None
     for r in rows:
-        group_id = (r['norm_title'], r['reg_dt'])
+        group_id = (r['norm_title'], r['report_date'])
         if group_id != current_group_key:
             output.append("\n" + "="*140)
-            output.append(f"[그룹] 날짜: {r['reg_dt']} | 제목: {r['article_title']}")
+            output.append(f"[그룹] 날짜: {r['report_date']} | 제목: {r['article_title']}")
             output.append("-"*140)
             current_group_key = group_id
         

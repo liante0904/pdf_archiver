@@ -63,7 +63,7 @@ def _row_payload(row):
         "download_url": row[6],
         "firm_nm": row[7],
         "title": row[8],
-        "reg_dt": row[9],
+        "report_date": row[9],
     }
 
 
@@ -78,7 +78,7 @@ class WorkflowRecord(dict):
         "download_url",
         "firm_nm",
         "title",
-        "reg_dt",
+        "report_date",
         "pdf_hash",
     )
 
@@ -130,11 +130,11 @@ class PDFArchiver(RcloneManager):
             # 로그 출력: 상태바 + 퍼센트 + 결과 이모티콘 + report_id + 증권사 | 제목
             logging.info(f"|{bar}| {pct:5.1f}% {emoji} [{self.processed_count:3}/{self.total_targets:3}] report_id={report_id} {firm} | {title[:25]}... | {short_url}")
 
-    def _add_success_record(self, row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, size, pages, pdf_hash):
+    def _add_success_record(self, row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, report_date, target_path, size, pages, pdf_hash):
         self.success_downloads.append(WorkflowRecord({
             "row_id": row_id, "report_id": report_id, "sec_firm_order": sec_firm_order,
             "report_unique_key": key_url, "pdf_url": pdf_url, "telegram_url": tel_url, "download_url": dw_url,
-            "firm_nm": firm, "title": title, "reg_dt": reg_dt, "path": target_path,
+            "firm_nm": firm, "title": title, "report_date": report_date, "path": target_path,
             "size": size, "pages": pages, "pdf_hash": pdf_hash,
         }))
 
@@ -142,17 +142,17 @@ class PDFArchiver(RcloneManager):
         """비동기 다운로드 래퍼: await coro → 성공 시 success_downloads 에 기록하고 True."""
         result = await coro
         if result:
-            row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt = row_meta
+            row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, report_date = row_meta
             self._add_success_record(
                 row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url,
-                firm, title, reg_dt, target_path,
+                firm, title, report_date, target_path,
                 result["size"], result["pages"], result.get("pdf_hash"),
             )
             return True
         return False
 
-    def _make_file_path(self, firm, title, reg_dt, report_id):
-        clean_dt = re.sub(r'[^0-9]', '', str(reg_dt)) if reg_dt else "00000000"
+    def _make_file_path(self, firm, title, report_date, report_id):
+        clean_dt = re.sub(r'[^0-9]', '', str(report_date)) if report_date else "00000000"
         y_m = f"{clean_dt[:4]}-{clean_dt[4:6]}"
         yy_mm_dd = clean_dt[2:8]
         normalized = unicodedata.normalize('NFC', title or '')
@@ -162,16 +162,16 @@ class PDFArchiver(RcloneManager):
         return self.local_dir / y_m / firm / filename
 
     async def download_task(self, row):
-        # row: (id, report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm, title, reg_dt)
-        row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt = row
-        row_meta = (row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt)
+        # row: (id, report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm, title, report_date)
+        row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, report_date = row
+        row_meta = (row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, report_date)
         raw_urls = _download_sources_for_firm(key_url, pdf_url, tel_url, dw_url)
         candidates = build_candidate_urls(firm, raw_urls)
         
         proxy_url = os.getenv("WARP_PROXY")
         use_proxy = proxy_url and any(k in firm for k in ("LS",))
 
-        target_path = self._make_file_path(firm, title, reg_dt, report_id)
+        target_path = self._make_file_path(firm, title, report_date, report_id)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = target_path.with_suffix('.tmp')
 
@@ -185,7 +185,7 @@ class PDFArchiver(RcloneManager):
                 async with self.dbfi_semaphore:
                     ok = await self._try_await_record_download(
                         row_meta, target_path,
-                        download_dbfi_pdf(dbfi_source_url, target_path, title, report_id, firm, reg_dt),
+                        download_dbfi_pdf(dbfi_source_url, target_path, title, report_id, firm, report_date),
                     )
                     if Config.DBFI_REQUEST_DELAY_SECONDS > 0:
                         await asyncio.sleep(Config.DBFI_REQUEST_DELAY_SECONDS)
@@ -194,7 +194,7 @@ class PDFArchiver(RcloneManager):
             if not ok and firm == "미래에셋증권":
                 ok = await self._try_await_record_download(
                     row_meta, target_path,
-                    download_mirae_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                    download_mirae_pdf(candidates, target_path, title, report_id, firm, report_date),
                 )
 
             # 3. DS투자증권 특수 처리
@@ -202,7 +202,7 @@ class PDFArchiver(RcloneManager):
                 for url in candidates:
                     ok = await self._try_await_record_download(
                         row_meta, target_path,
-                        download_ds_pdf(url, target_path, title, report_id, firm, reg_dt),
+                        download_ds_pdf(url, target_path, title, report_id, firm, report_date),
                     )
                     if ok:
                         break
@@ -212,20 +212,20 @@ class PDFArchiver(RcloneManager):
             if not ok and "LS" in firm:
                 ok = await self._try_await_record_download(
                     row_meta, target_path,
-                    download_ls_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                    download_ls_pdf(candidates, target_path, title, report_id, firm, report_date),
                 )
             # 3b. 교보증권 특수 처리 (게시판 뷰 페이지에서 실제 PDF URL 추출)
             if not ok and firm == "교보증권":
                 ok = await self._try_await_record_download(
                     row_meta, target_path,
-                    download_kyobo_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                    download_kyobo_pdf(candidates, target_path, title, report_id, firm, report_date),
                 )
 
             # 3c. 하나증권 특수 처리 (게시판에서 유효한 다운로드 URL 재추출)
             if not ok and firm == "하나증권":
                 ok = await self._try_await_record_download(
                     row_meta, target_path,
-                    download_hana_pdf(candidates, target_path, title, report_id, firm, reg_dt),
+                    download_hana_pdf(candidates, target_path, title, report_id, firm, report_date),
                 )
 
             # 4. 일반 다운로드 (wget) — 4개 증권사(대신/IBK/삼성/다올/교보)는 쿠키+Referer 처리
@@ -239,7 +239,7 @@ class PDFArchiver(RcloneManager):
                         if cookie_string:
                             logging.info(
                                 "%s session cookies acquired: %s",
-                                _report_prefix(firm, title, report_id, reg_dt),
+                                _report_prefix(firm, title, report_id, report_date),
                                 cookie_string,
                             )
 
@@ -274,13 +274,13 @@ class PDFArchiver(RcloneManager):
                                 if target_path.exists(): target_path.unlink()
                                 tmp_path.rename(target_path)
                                 pages = await get_pdf_page_count(target_path)
-                                self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, reg_dt, target_path, target_path.stat().st_size, pages, _pdf_hash_bytes(body))
+                                self._add_success_record(row_id, report_id, sec_firm_order, key_url, pdf_url, tel_url, dw_url, firm, title, report_date, target_path, target_path.stat().st_size, pages, _pdf_hash_bytes(body))
                                 ok = True
                                 break
                         else:
                             logging.warning(
                                 "%s download failed returncode=%s size=%s url=%s",
-                                _report_prefix(firm, title, report_id, reg_dt),
+                                _report_prefix(firm, title, report_id, report_date),
                                 proc.returncode,
                                 tmp_path.stat().st_size if tmp_path.exists() else 0,
                                 _truncate(url, 220),
@@ -288,7 +288,7 @@ class PDFArchiver(RcloneManager):
                     except Exception as e:
                         logging.warning(
                             "%s download exception %s: %r url=%s",
-                            _report_prefix(firm, title, report_id, reg_dt),
+                            _report_prefix(firm, title, report_id, report_date),
                             type(e).__name__,
                             e,
                             _truncate(url, 220),
@@ -320,7 +320,7 @@ class PDFArchiver(RcloneManager):
         await conn.execute(
             f'''
             INSERT INTO {Config.META_TABLE} (
-                report_id, firm_nm, title, author, reg_dt, pdf_url, {Config.PDF_HASH_COL},
+                report_id, firm_nm, title, author, report_date, pdf_url, {Config.PDF_HASH_COL},
                 has_text, is_encrypted, storage_backend, storage_key, download_url, telegram_url,
                 key, archive_status, file_name, download_status_yn, file_path, file_size, page_count,
                 last_accessed_at, {Config.PDF_STATUS_COL}, created_at, updated_at, retry_count
@@ -329,7 +329,7 @@ class PDFArchiver(RcloneManager):
             )
             ON CONFLICT (report_id) DO UPDATE SET
                 firm_nm = EXCLUDED.firm_nm, title = EXCLUDED.title, author = COALESCE(EXCLUDED.author, {Config.META_TABLE}.author),
-                reg_dt = EXCLUDED.reg_dt, pdf_url = EXCLUDED.pdf_url, {Config.PDF_HASH_COL} = COALESCE(EXCLUDED.{Config.PDF_HASH_COL}, {Config.META_TABLE}.{Config.PDF_HASH_COL}),
+                report_date = EXCLUDED.report_date, pdf_url = EXCLUDED.pdf_url, {Config.PDF_HASH_COL} = COALESCE(EXCLUDED.{Config.PDF_HASH_COL}, {Config.META_TABLE}.{Config.PDF_HASH_COL}),
                 storage_backend = COALESCE(EXCLUDED.storage_backend, {Config.META_TABLE}.storage_backend),
                 storage_key = COALESCE(EXCLUDED.storage_key, {Config.META_TABLE}.storage_key),
                 archive_status = COALESCE(EXCLUDED.archive_status, {Config.META_TABLE}.archive_status),
@@ -342,7 +342,7 @@ class PDFArchiver(RcloneManager):
                 updated_at = NOW(), retry_count = COALESCE({Config.META_TABLE}.retry_count, 0) + $24
             ''',
             int(payload["report_id"]), payload.get("firm_nm"), payload.get("title"), payload.get("author"),
-            payload.get("reg_dt"), payload.get("pdf_url"), payload.get("pdf_hash"), payload.get("has_text"),
+            payload.get("report_date"), payload.get("pdf_url"), payload.get("pdf_hash"), payload.get("has_text"),
             payload.get("is_encrypted"), payload.get("storage_backend") or "onedrive",
             storage_key or payload.get("storage_key") or (str(file_path) if file_path else None),
             payload.get("download_url"), payload.get("telegram_url"), payload.get("report_unique_key"),
@@ -579,7 +579,7 @@ class PDFArchiver(RcloneManager):
         """
         return f"""
             WITH base AS (
-                SELECT report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt,
+                SELECT report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm_nm, article_title, report_date,
                        {Config.PDF_STATUS_COL} as status,
                        retry_count,
                        CASE
@@ -620,14 +620,14 @@ class PDFArchiver(RcloneManager):
                                (CASE WHEN status = 0 THEN 0 ELSE 1 END),
                                COALESCE(retry_count, 0) ASC,
                                has_source_url DESC,
-                               reg_dt DESC,
+                               report_date DESC,
                                report_id DESC
                        ) AS firm_rank
                 FROM distinct_targets
             )
-            SELECT report_id as row_id, report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm_nm, article_title, reg_dt
+            SELECT report_id as row_id, report_id, sec_firm_order, report_unique_key, pdf_url, telegram_url, download_url, firm_nm, article_title, report_date
             FROM ranked_targets
-            ORDER BY firm_rank, reg_dt DESC, firm_nm, report_id DESC
+            ORDER BY firm_rank, report_date DESC, firm_nm, report_id DESC
             LIMIT {Config.BATCH_SIZE}
         """
 
@@ -703,7 +703,7 @@ class PDFArchiver(RcloneManager):
                     print(
                         "DEBUG: fetch-only target "
                         f"{idx:02d}: {target.get('firm_nm')} report_id={target.get('report_id')} "
-                        f"reg_dt={target.get('reg_dt')} title={_truncate(target.get('article_title'), 80)}"
+                        f"report_date={target.get('report_date')} title={_truncate(target.get('article_title'), 80)}"
                     )
                 return
 
