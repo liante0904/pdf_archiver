@@ -251,6 +251,7 @@ def compute_hash(path: Path) -> tuple[str, bytes]:
 
 async def process_one(
     sem: asyncio.Semaphore,
+    rclone_sem: asyncio.Semaphore,
     store: CloudStore,
     conn: asyncpg.Connection,
     db_lock: asyncio.Lock,
@@ -350,7 +351,8 @@ async def process_one(
             work_path = local_target
 
         try:
-            await store.upload(str(local_target), storage_key)
+            async with rclone_sem:
+                await store.upload(str(local_target), storage_key)
             async with db_lock:
                 await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
                                      storage_key, file_size, page_count=0,
@@ -382,6 +384,7 @@ async def run():
     start_time = datetime.datetime.now()
     consecutive_quota_failures = 0
     db_lock = asyncio.Lock()
+    rclone_sem = asyncio.Semaphore(int(os.getenv("V3_RCLONE_WORKERS", "1")))
 
     async with CloudStore(RCLONE_REMOTE, config=RCLONE_CONFIG) as store:
         try:
@@ -401,7 +404,7 @@ async def run():
 
                 log.info(f"Batch: {len(targets)} targets (quota_fails={consecutive_quota_failures}, elapsed={elapsed:.0f}s)")
                 results = await asyncio.gather(
-                    *(process_one(sem, store, conn, db_lock, t) for t in targets),
+                    *(process_one(sem, rclone_sem, store, conn, db_lock, t) for t in targets),
                     return_exceptions=True,
                 )
 
