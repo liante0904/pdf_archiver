@@ -532,13 +532,29 @@ async def run():
 
     finally:
         await conn.close()
-        # cleanup empty dirs
+        # ── buffer cleanup ──
+        # Remove stale files from previous runs (older than this run's start).
+        stale_count = 0
+        stale_bytes = 0
         for root, dirs, files in os.walk(LOCAL_BUFFER, topdown=False):
+            for fname in files:
+                fpath = os.path.join(root, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if mtime < start_time.timestamp():
+                        size = os.path.getsize(fpath)
+                        os.unlink(fpath)
+                        stale_count += 1
+                        stale_bytes += size
+                except OSError:
+                    pass
             for d in dirs:
                 try:
                     os.rmdir(os.path.join(root, d))
                 except OSError:
                     pass
+        if stale_count > 0:
+            log.info(f"Buffer cleanup: removed {stale_count} stale files ({stale_bytes//1024}KB)")
 
 
 def acquire_lock() -> bool:
