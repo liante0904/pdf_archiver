@@ -49,7 +49,8 @@ log = logging.getLogger("pdf_archiver_v2")
 
 # ── Config (env 기반) ───────────────────────────────────────
 BATCH_SIZE = int(os.getenv("V2_BATCH_SIZE", "20"))
-WORKERS = int(os.getenv("V2_WORKERS", "6"))
+WORKERS = int(os.getenv("V2_WORKERS", "6"))            # download concurrency
+RCLONE_WORKERS = int(os.getenv("V2_RCLONE_WORKERS", "1"))  # rclone upload concurrency (limit API calls)
 HTTP_TIMEOUT = int(os.getenv("V2_HTTP_TIMEOUT", "45"))
 # ⚠️ GDrive: 서비스 계정(gdrive_sa) 사용 → OAuth 토큰 만료 없음
 # - 서비스 계정: ag-cli-worker@gen-lang-client-0035351125.iam.gserviceaccount.com
@@ -332,8 +333,9 @@ def compute_hash(path: Path) -> tuple[str, bytes]:
 
 # ── Main download + dedup logic ─────────────────────────────
 
-async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
-                      db_lock: asyncio.Lock, row: asyncpg.Record):
+async def process_one(sem: asyncio.Semaphore, rclone_sem: asyncio.Semaphore,
+                      conn: asyncpg.Connection, db_lock: asyncio.Lock,
+                      row: asyncpg.Record):
     """레코드 1건 처리: 다운로드 → hash → 중복검사 → 업로드/참조
 
     Returns:
@@ -428,7 +430,8 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
             work_path.rename(local_target)
             work_path = local_target
 
-        uploaded, quota_exceeded = await rclone_upload(str(local_target), storage_key)
+        async with rclone_sem:
+            uploaded, quota_exceeded = await rclone_upload(str(local_target), storage_key)
 
         if uploaded:
             async with db_lock:
@@ -462,6 +465,7 @@ async def run():
     start_time = datetime.datetime.now()
     consecutive_quota_failures = 0
     db_lock = asyncio.Lock()  # serialize DB writes — asyncpg conn is single-operation
+    rclone_sem = asyncio.Semaphore(RCLONE_WORKERS)  # limit concurrent GDrive API calls
     try:
         LOCAL_BUFFER.mkdir(parents=True, exist_ok=True)
         sem = asyncio.Semaphore(WORKERS)
@@ -480,7 +484,7 @@ async def run():
 
             log.info(f"Batch: {len(targets)} targets (quota_fails={consecutive_quota_failures}, elapsed={elapsed:.0f}s)")
             results = await asyncio.gather(
-                *(process_one(sem, conn, db_lock, t) for t in targets),
+                *(process_one(sem, rclone_sem, conn, db_lock, t) for t in targets),
                 return_exceptions=True,
             )
 
