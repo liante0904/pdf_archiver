@@ -80,6 +80,19 @@ ssh -f -N -L 5433:10.0.0.111:5432 -o ServerAliveInterval=30 oci
 | DB tunnel IP | `127.0.0.1` → DB 연결 안됨 | `10.0.0.111`로 수정 |
 | asyncpg SSL | SSL handshake 실패 | `ssl=False` |
 | zombie lock | v2 4일간 정지 | lock 파일 PID 체크 후 정리 |
+| GDrive 403 Quota | 전건 실패 (0 ok), 무한루프 | rclone stderr 파싱 → exponential backoff + max runtime guard |
+| InterfaceError | "another operation in progress" | asyncio.Lock으로 DB 작업 직렬화 (asyncpg conn은 단일 작업만 가능) |
+| DataError (date) | report_date `expected str, got date` | asyncpg가 DATE 컬럼을 `datetime.date`로 반환 → str 변환 |
+| stale lock | kill -9 후 cron 진입 불가 | `acquire_lock()`에서 PID 존재 여부 확인 후 정리 |
+
+## v2 Quota / Rate-limit 설계 (2026-07-06)
+
+GDrive 개인 계정은 100 QPM 제한 → `--drive-pacer-min-sleep 200ms --drive-pacer-burst 2`로 rclone 호출 간격 조절.
+Quota 초과 감지 시:
+- retry_count 증가하지 않음 (DB_RETRY_LIMIT 소진 방지)
+- exponential backoff: `QUOTA_BACKOFF_BASE * 2^min(consecutive_failures, 6)` (기본 5s → 최대 320s)
+- `MAX_CONSECUTIVE_QUOTA_FAILURES` (기본 12) 도달 시 종료 → 다음 cron run에서 재시도
+- 성공적인 업로드 발생 시 counter reset
 
 ## 주요 환경변수 (`.env`)
 ```
