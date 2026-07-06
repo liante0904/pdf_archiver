@@ -13,6 +13,7 @@ v1(pdf_archiver_async.py) 대비 개선점:
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
 import os
 import re
@@ -23,7 +24,7 @@ import fcntl
 import tempfile
 import unicodedata
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import aiohttp
@@ -61,6 +62,12 @@ RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", os.path.expanduser("~/.config/rclone/
 LOCAL_BUFFER = Path(os.getenv("V2_BUFFER_DIR", "/tmp/pdf_archiver_v2"))
 DB_RETRY_LIMIT = int(os.getenv("V2_RETRY_LIMIT", "8"))
 LOCK_FILE = "/tmp/pdf_archiver_v2.lock"
+
+# ── Quota / rate-limit guards ─────────────────────────────────
+MAX_CONSECUTIVE_QUOTA_FAILURES = int(os.getenv("V2_MAX_QUOTA_FAILURES", "12"))
+MAX_RUNTIME_SECONDS = int(os.getenv("V2_MAX_RUNTIME", "1800"))  # 30 min
+QUOTA_BACKOFF_BASE = float(os.getenv("V2_QUOTA_BACKOFF_BASE", "5.0"))  # seconds
+RCLONE_PACER_SLEEP = os.getenv("V2_RCLONE_PACER_SLEEP", "200ms")  # min sleep between API calls
 
 SOURCE_TABLE = '"tbl_sec_reports"'
 ARCHIVE_TABLE = '"tbl_sec_reports_pdf_archive"'
@@ -187,8 +194,13 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
 
 # ── rclone upload ───────────────────────────────────────────
 
-async def rclone_upload(local_path: str, remote_path: str) -> bool:
-    """rclone copyto → 성공 시 True"""
+async def rclone_upload(local_path: str, remote_path: str) -> Tuple[bool, bool]:
+    """rclone copyto → (success, quota_exceeded)
+
+    Returns (True, False) on success.
+    Returns (False, True) if GDrive API quota exceeded (should backoff).
+    Returns (False, False) for other failures.
+    """
     env = os.environ.copy()
     env["RCLONE_CONFIG"] = RCLONE_CONFIG
 
@@ -198,6 +210,8 @@ async def rclone_upload(local_path: str, remote_path: str) -> bool:
         "copyto", str(local_path), remote_full,
         "--retries", "3",
         "--low-level-retries", "5",
+        "--drive-pacer-min-sleep", RCLONE_PACER_SLEEP,
+        "--drive-pacer-burst", "2",
     ]
 
     proc = await asyncio.create_subprocess_exec(
@@ -208,10 +222,20 @@ async def rclone_upload(local_path: str, remote_path: str) -> bool:
     _, stderr = await proc.communicate()
 
     if proc.returncode != 0:
-        stderr_text = stderr.decode(errors="replace")[:300]
-        log.warning(f"rclone upload failed: {stderr_text}")
-        return False
-    return True
+        stderr_text = stderr.decode(errors="replace")
+        # Detect quota / rate-limit errors
+        is_quota = (
+            "Quota exceeded" in stderr_text
+            or "Error 403" in stderr_text
+            or "rateLimitExceeded" in stderr_text
+            or "userRateLimitExceeded" in stderr_text
+        )
+        if is_quota:
+            log.warning(f"rclone QUOTA EXCEEDED: {stderr_text[:200]}")
+            return False, True
+        log.warning(f"rclone upload failed: {stderr_text[:300]}")
+        return False, False
+    return True, False
 
 
 # ── File path builder ───────────────────────────────────────
@@ -309,23 +333,31 @@ def compute_hash(path: Path) -> tuple[str, bytes]:
 # ── Main download + dedup logic ─────────────────────────────
 
 async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
-                      row: asyncpg.Record) -> bool:
-    """레코드 1건 처리: 다운로드 → hash → 중복검사 → 업로드/참조"""
+                      db_lock: asyncio.Lock, row: asyncpg.Record):
+    """레코드 1건 처리: 다운로드 → hash → 중복검사 → 업로드/참조
+
+    Returns:
+        True: uploaded or duplicate found
+        False: download or non-quota upload failure
+        "quota": GDrive API quota exceeded
+    """
     async with sem:
         report_id = row["report_id"]
         firm = row["firm_nm"] or "UNKNOWN"
         title = row["article_title"] or "untitled"
         report_date = row["report_date"] or ""
+        report_date_str = str(report_date) if not isinstance(report_date, str) else report_date
         pdf_url = row["pdf_url"] or row["report_unique_key"] or row["telegram_url"] or row["download_url"]
         sec_order = row["firm_id"] or 0
 
         if not pdf_url:
-            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
-                                 storage_key="", file_size=0, page_count=0,
-                                 pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
+            async with db_lock:
+                await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
+                                     storage_key="", file_size=0, page_count=0,
+                                     pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
             return False
 
-        storage_key = build_storage_key(firm, title, report_date, report_id)
+        storage_key = build_storage_key(firm, title, report_date_str, report_id)
         local_target = LOCAL_BUFFER / storage_key
         local_target.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = local_target.with_suffix(".tmp")
@@ -369,9 +401,10 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
             for p in [tmp_path, local_target]:
                 if p.exists():
                     p.unlink(missing_ok=True)
-            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
-                                 storage_key="", file_size=0, page_count=0,
-                                 pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
+            async with db_lock:
+                await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
+                                     storage_key="", file_size=0, page_count=0,
+                                     pdf_hash="", pdf_hash_bytes=None, success=False, retry_delta=1)
             return False
 
         # 3. hash 계산
@@ -379,12 +412,14 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
         file_size = work_path.stat().st_size
 
         # 4. 중복 검사
-        existing = await find_by_hash(conn, pdf_hash_hex)
+        async with db_lock:
+            existing = await find_by_hash(conn, pdf_hash_hex)
         if existing:
             log.info(f"[{report_id}] DUPLICATE → canonical={existing['report_id']} hash={pdf_hash_hex[:16]}...")
-            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
-                                 existing["storage_key"], existing["file_size"] or file_size,
-                                 existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True, retry_delta=0)
+            async with db_lock:
+                await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
+                                     existing["storage_key"], existing["file_size"] or file_size,
+                                     existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True, retry_delta=0)
             work_path.unlink(missing_ok=True)
             return True
 
@@ -393,20 +428,29 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
             work_path.rename(local_target)
             work_path = local_target
 
-        uploaded = await rclone_upload(str(local_target), storage_key)
+        uploaded, quota_exceeded = await rclone_upload(str(local_target), storage_key)
 
         if uploaded:
-            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
-                                 storage_key, file_size, page_count=0,
-                                 pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=True, retry_delta=0)
+            async with db_lock:
+                await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
+                                     storage_key, file_size, page_count=0,
+                                     pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=True, retry_delta=0)
             local_target.unlink(missing_ok=True)
             log.info(f"[{report_id}] UPLOADED {firm} | {title[:30]}...")
             return True
+        elif quota_exceeded:
+            async with db_lock:
+                await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
+                                     storage_key, file_size, page_count=0,
+                                     pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=False, retry_delta=0)
+            log.warning(f"[{report_id}] QUOTA_EXCEEDED (retry not incremented) {firm} | {title[:30]}...")
+            return "quota"
         else:
             # 업로드 실패 → 파일 보존, 다음 run에서 재시도
-            await upsert_archive(conn, report_id, firm, title, report_date, pdf_url,
-                                 storage_key, file_size, page_count=0,
-                                 pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=False, retry_delta=1)
+            async with db_lock:
+                await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
+                                     storage_key, file_size, page_count=0,
+                                     pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=False, retry_delta=1)
             log.warning(f"[{report_id}] UPLOAD FAILED {firm} | {title[:30]}...")
             return False
 
@@ -415,24 +459,67 @@ async def process_one(sem: asyncio.Semaphore, conn: asyncpg.Connection,
 
 async def run():
     conn = await db_connect()
+    start_time = datetime.datetime.now()
+    consecutive_quota_failures = 0
+    db_lock = asyncio.Lock()  # serialize DB writes — asyncpg conn is single-operation
     try:
         LOCAL_BUFFER.mkdir(parents=True, exist_ok=True)
         sem = asyncio.Semaphore(WORKERS)
 
         while True:
+            # ── max runtime guard ──
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            if elapsed > MAX_RUNTIME_SECONDS:
+                log.warning(f"Max runtime {MAX_RUNTIME_SECONDS}s reached (elapsed={elapsed:.0f}s). Exiting.")
+                break
+
             targets = await fetch_targets(conn, BATCH_SIZE)
             if not targets:
                 log.info("No pending targets.")
                 break
 
-            log.info(f"Batch: {len(targets)} targets")
+            log.info(f"Batch: {len(targets)} targets (quota_fails={consecutive_quota_failures}, elapsed={elapsed:.0f}s)")
             results = await asyncio.gather(
-                *(process_one(sem, conn, t) for t in targets),
+                *(process_one(sem, conn, db_lock, t) for t in targets),
                 return_exceptions=True,
             )
-            ok = sum(1 for r in results if r is True)
-            fail = len(targets) - ok
-            log.info(f"Batch done: {ok} ok, {fail} fail")
+
+            # ── tally results, detect quota failures ──
+            ok = 0
+            fail = 0
+            quota = 0
+            for r in results:
+                if r is True:
+                    ok += 1
+                elif r == "quota":
+                    quota += 1
+                elif isinstance(r, Exception):
+                    log.error(f"Batch exception: {type(r).__name__}: {r}")
+                    fail += 1
+                else:
+                    fail += 1
+
+            log.info(f"Batch done: {ok} ok, {fail} fail, {quota} quota_exceeded")
+
+            # ── quota backoff logic ──
+            if quota > 0:
+                consecutive_quota_failures += quota
+                if consecutive_quota_failures >= MAX_CONSECUTIVE_QUOTA_FAILURES:
+                    log.error(
+                        f"Too many consecutive quota failures ({consecutive_quota_failures}). "
+                        f"Giving up. Will retry on next cron run."
+                    )
+                    break
+                # exponential backoff: base * 2^(min(failures, 6))
+                delay = QUOTA_BACKOFF_BASE * (2 ** min(consecutive_quota_failures, 6))
+                log.warning(
+                    f"Quota backoff: sleeping {delay:.0f}s "
+                    f"(consecutive_quota_failures={consecutive_quota_failures})"
+                )
+                await asyncio.sleep(delay)
+            elif ok > 0:
+                # successful uploads reset the backoff counter
+                consecutive_quota_failures = 0
 
             if len(targets) < BATCH_SIZE:
                 break
@@ -451,12 +538,36 @@ async def run():
 
 
 def acquire_lock() -> bool:
-    """파일 락 획득 → 이미 실행 중이면 False"""
+    """파일 락 획득 → 이미 실행 중이면 False
+
+    Stale lock이면 (PID가 더 이상 존재하지 않으면) 정리 후 재시도.
+    Python fcntl 락은 프로세스 종료 시 커널이 해제하지만,
+    lock file 자체는 남아있을 수 있음.
+    """
+    # 1. stale lock check
+    try:
+        with open(LOCK_FILE, "r") as f:
+            old_pid = f.read().strip()
+        if old_pid:
+            try:
+                os.kill(int(old_pid), 0)  # signal 0 → 존재 확인만
+            except (OSError, ValueError):
+                # 프로세스 없음 → stale lock 정리
+                log.warning(f"Stale lock detected (PID {old_pid} gone). Cleaning up.")
+                try:
+                    os.unlink(LOCK_FILE)
+                except OSError:
+                    pass
+    except FileNotFoundError:
+        pass  # lock file 없음 = 정상
+
+    # 2. acquire fcntl lock
     try:
         lock_f = open(LOCK_FILE, "w")
         fcntl.lockf(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         lock_f.write(str(os.getpid()))
         lock_f.flush()
+        # keep lock_f open → 커널이 프로세스 종료 시 자동 해제
         return True
     except (IOError, OSError):
         return False
