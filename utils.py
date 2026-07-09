@@ -56,8 +56,8 @@ def _is_pdf_payload(data: bytes):
 def _report_prefix(firm, title, report_id, report_date=None):
     return f"[{firm} | {title} | report_id={report_id}" + (f" | report_date={report_date}]" if report_date else "]")
 
-def _download_sources_for_firm(key_url, pdf_url, tel_url, dw_url):
-    sources = [u for u in (pdf_url, tel_url, dw_url, key_url) if u and str(u).startswith("http")]
+def _download_sources_for_firm(key_url, pdf_url, tel_url):
+    sources = [u for u in (pdf_url, tel_url, key_url) if u and str(u).startswith("http")]
     return sources
 
 def _browser_like_headers(referer=None):
@@ -165,14 +165,14 @@ def _firm_base_domain(url: str) -> str | None:
         pass
     return None
 
-def _get_first_url(pdf_url, key_url, tel_url, dw_url, candidates):
-    """우선순위: pdf_url > candidates[0] > key_url > tel_url > dw_url"""
+def _get_first_url(pdf_url, key_url, tel_url, candidates):
+    """우선순위: pdf_url > candidates[0] > key_url > tel_url"""
     for u in (pdf_url,):
         if u:
             return u
     if candidates:
         return candidates[0]
-    for u in (key_url, tel_url, dw_url):
+    for u in (key_url, tel_url):
         if u:
             return u
     return None
