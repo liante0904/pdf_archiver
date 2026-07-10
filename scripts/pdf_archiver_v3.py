@@ -132,7 +132,6 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
                          retry_delta: int = 0):
     status = 2 if success else 3
     archive_status = "ARCHIVED" if success else "INIT"
-    dl_yn = "Y" if success else "N"
     file_name = Path(storage_key).name if storage_key else None
 
     await conn.execute(
@@ -140,9 +139,9 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
         INSERT INTO {ARCHIVE_TABLE} (
             report_id, firm_nm, title, report_date, pdf_url, pdf_hash,
             storage_backend, storage_key, file_name, file_size, page_count,
-            archive_status, download_status_yn, pdf_sync_status, sync_status,
+            archive_status, pdf_sync_status, sync_status,
             created_at, updated_at, retry_count
-        ) VALUES ($1,$2,$3,$4,$5,$6,'googledrive',$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW(),$15)
+        ) VALUES ($1,$2,$3,$4,$5,$6,'googledrive',$7,$8,$9,$10,$11,$12,$13,NOW(),NOW(),$14)
         ON CONFLICT (report_id) DO UPDATE SET
             firm_nm = EXCLUDED.firm_nm,
             title = EXCLUDED.title,
@@ -155,7 +154,6 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
             file_size = COALESCE(EXCLUDED.file_size, {ARCHIVE_TABLE}.file_size),
             page_count = COALESCE(EXCLUDED.page_count, {ARCHIVE_TABLE}.page_count),
             archive_status = EXCLUDED.archive_status,
-            download_status_yn = EXCLUDED.download_status_yn,
             pdf_sync_status = EXCLUDED.pdf_sync_status,
             sync_status = COALESCE({ARCHIVE_TABLE}.sync_status, EXCLUDED.sync_status),
             retry_count = COALESCE({ARCHIVE_TABLE}.retry_count, 0) + EXCLUDED.retry_count,
@@ -163,7 +161,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
         """,
         report_id, firm_nm, title, report_date, pdf_url, pdf_hash_bytes,
         storage_key, file_name, file_size, page_count,
-        archive_status, dl_yn, status, status, retry_delta,
+        archive_status, status, status, retry_delta,
     )
 
 
