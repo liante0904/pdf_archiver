@@ -5,18 +5,19 @@
 ## 아키텍처
 
 ```
-tbl_sec_reports (source) → v2 (pdf_archiver_v2.py) → GDrive (archive/pdf)
+tbl_sec_reports (source) → v3 (pdf_archiver_v3.py) → GDrive (archive/pdf)
          ↓                                                    ↓
 tbl_sec_reports_pdf_archive (meta + gdrive_file_id)    nginx proxy → https://ssh-oci.duckdns.org/pdf/{file_id}
 ```
 
 - **v1** (`pdf_archiver_async.py`): OneDrive 업로드. **deprecated**.
-- **v2** (`scripts/pdf_archiver_v2.py`): GDrive 업로드. **현재 운영 중**.
-- 크론: `*/3 * * * * bash run_v2.sh`
+- **v2** (`scripts/pdf_archiver_v2.py`): 이전 GDrive 구현. 현재 운영 진입점 아님.
+- **v3** (`scripts/pdf_archiver_v3.py`): `lib/cloud_store` 기반 GDrive 업로드. **현재 운영 중**.
+- arm2 사용자 크론: `*/3 * * * * bash /home/ubuntu/workspace/services/pdf-archiver/scripts/run_v3.sh`
 
 ## Google Drive
 
-### OAuth (v2 업로드용)
+### OAuth (v3 업로드용)
 - rclone remote: `gdrive:archive/pdf` (개인 계정 OAuth)
 - 토큰: `~/.config/rclone/rclone.conf` → `[gdrive]`
 - refresh_token으로 자동 갱신. 만료 시 Mac에서:
@@ -40,6 +41,14 @@ tbl_sec_reports_pdf_archive (meta + gdrive_file_id)    nginx proxy → https://s
 
 ## DB 연결
 
+2026-07-10 운영 catalog 기준 URL/키 계약:
+
+- `tbl_sec_reports`: `pdf_url`, `telegram_url`, `report_unique_key`
+- `tbl_sec_reports_pdf_archive`: `pdf_url`, `telegram_url`
+- 두 테이블 모두 `download_url`, `download_status_yn`을 사용하지 않음
+
+새 쿼리는 제거된 컬럼을 호환 fallback으로도 다시 추가하지 않는다.
+
 ### ⚠️ SSH 터널 필수 (arm2 → OCI)
 ```bash
 ssh -f -N -L 5433:10.0.0.111:5432 -o ServerAliveInterval=30 oci
@@ -50,7 +59,7 @@ ssh -f -N -L 5433:10.0.0.111:5432 -o ServerAliveInterval=30 oci
 
 ## 다운로더
 
-`downloaders/` — 증권사별 전용 PDF 다운로드. v2 registry에 등록됨.
+`downloaders/` — 증권사별 전용 PDF 다운로드. 현재 v3 registry에 등록됨.
 
 | 파일 | 증권사 | 방식 |
 |------|--------|------|
