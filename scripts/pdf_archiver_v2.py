@@ -114,7 +114,7 @@ async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Re
     """메인 테이블은 읽기 전용, 상태는 archive 테이블 LEFT JOIN 으로 판단"""
     return await conn.fetch(
         f"""
-        SELECT s.report_id, s.firm_id, s.report_unique_key, s.pdf_url, s.telegram_url, s.download_url,
+        SELECT s.report_id, s.firm_id, s.report_unique_key, s.pdf_url, s.telegram_url,
                s.firm_nm, s.article_title, s.report_date,
                COALESCE(a.retry_count, 0) as retry_count
         FROM {SOURCE_TABLE} s
@@ -123,7 +123,6 @@ async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Re
           AND COALESCE(a.retry_count, 0) < {DB_RETRY_LIMIT}
           AND (NULLIF(BTRIM(s.pdf_url), '') IS NOT NULL
                OR NULLIF(BTRIM(s.telegram_url), '') IS NOT NULL
-               OR NULLIF(BTRIM(s.download_url), '') IS NOT NULL
                OR NULLIF(BTRIM(s.report_unique_key), '') IS NOT NULL)
         ORDER BY COALESCE(a.retry_count, 0) ASC, s.report_date DESC, s.report_id ASC
         LIMIT $1
@@ -349,7 +348,7 @@ async def process_one(sem: asyncio.Semaphore, rclone_sem: asyncio.Semaphore,
         title = row["article_title"] or "untitled"
         report_date = row["report_date"] or ""
         report_date_str = str(report_date) if not isinstance(report_date, str) else report_date
-        pdf_url = row["pdf_url"] or row["report_unique_key"] or row["telegram_url"] or row["download_url"]
+        pdf_url = row["pdf_url"] or row["report_unique_key"] or row["telegram_url"]
         sec_order = row["firm_id"] or 0
 
         if not pdf_url:
@@ -370,7 +369,7 @@ async def process_one(sem: asyncio.Semaphore, rclone_sem: asyncio.Semaphore,
         if downloader:
             try:
                 candidates = [
-                    u for u in [row["pdf_url"], row["telegram_url"], row["download_url"], row["report_unique_key"]]
+                    u for u in [row["pdf_url"], row["telegram_url"], row["report_unique_key"]]
                     if u and str(u).strip()
                 ]
                 result = await downloader(candidates, local_target, title, report_id, firm, report_date)
