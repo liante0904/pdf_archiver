@@ -41,13 +41,42 @@ tbl_sec_reports_pdf_archive (meta + gdrive_file_id)    nginx proxy → https://s
 
 ## DB 연결
 
-2026-07-10 운영 catalog 기준 URL/키 계약:
+### 스키마 (2026-08-03 운영 기준)
 
-- `tbl_sec_reports`: `pdf_url`, `telegram_url`, `report_unique_key`
-- `tbl_sec_reports_pdf_archive`: `pdf_url`, `telegram_url`
-- 두 테이블 모두 `download_url`, `download_status_yn`을 사용하지 않음
+**`tbl_sec_reports`** (소스 리포트):
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| `report_id` | bigint PK | 자동증가 |
+| `firm_nm` | text | 증권사명 (예: 하나증권, KB증권) |
+| `report_unique_key` | text UNIQUE | 리포트 식별키 |
+| `article_title` | text | 리포트 제목 |
+| `writer` | text | 작성자 |
+| `pdf_url` | text | PDF 다운로드 URL |
+| `telegram_url` | text | 텔레그램 URL |
+| `report_date` | date | 리포트 발행일 |
+| `save_at` | timestamptz | 저장 시각 |
+| `mkt_tp` | text | 마켓 구분 (기본 'KR') |
 
-새 쿼리는 제거된 컬럼을 호환 fallback으로도 다시 추가하지 않는다.
+**`tbl_sec_reports_pdf_archive`** (아카이브 메타):
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| `report_id` | bigint PK | `tbl_sec_reports.report_id` 와 동일값 |
+| `firm_nm` | text | 증권사명 |
+| `archive_status` | text | `ARCHIVED` / `INIT` |
+| `storage_backend` | text | `googledrive` (v3), `onedrive` (v1 legacy) |
+| `storage_key` | text | GDrive file ID |
+| `file_path` | text | GDrive 경로 |
+| `file_size` | bigint | 바이트 |
+| `page_count` | integer | 페이지 수 |
+| `file_name` | text | 파일명 |
+| `pdf_hash` | bytea | SHA-256 |
+| `created_at` | timestamptz | 아카이빙 완료 시각 |
+
+**Join**: `tbl_sec_reports.report_id = tbl_sec_reports_pdf_archive.report_id`
+- ⚠️ `report_unique_key`는 archive 테이블에 **없음**. join에 사용 불가.
+- 두 테이블 모두 `download_url`, `download_status_yn` 컬럼 없음 (deprecated).
+
+**참고**: archive 테이블 row 수가 소스보다 많을 수 있음 (~13K). v1/v2 시절 레거시 데이터가 소스에서 삭제되었으나 archive에 남아있는 건.
 
 ### ⚠️ SSH 터널 필수 (arm2 → OCI)
 ```bash
