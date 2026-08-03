@@ -31,5 +31,5 @@ The arm2 production schedule runs every five minutes:
 */5 * * * * bash /home/ubuntu/workspace/services/pdf-archiver/scripts/run_storage_key_backfill.sh
 ```
 
-Each run updates at most 10 uniquely matched rows. It reuses the reviewed local
+Each run updates at most 500 uniquely matched rows. It reuses the reviewed local
 manifest and never re-lists GDrive from cron.

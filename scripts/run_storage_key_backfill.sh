@@ -1,5 +1,5 @@
 #!/bin/bash
-# Historical storage-key repair: 10 uniquely matched rows per hourly run.
+# Historical storage-key repair: 500 uniquely matched rows per cron run.
 # Production PDF downloads remain owned by scripts/run_v3.sh.
 set -e
 
@@ -15,5 +15,5 @@ fi
 
 POSTGRES_HOST=localhost POSTGRES_PORT=5433 \
   /home/ubuntu/.local/bin/uv run --env-file .env python scripts/backfill_storage_keys.py \
-    --execute --max-updates 10 \
+    --execute --max-updates 500 \
   >> "$LOGDIR/storage_key_backfill.log" 2>&1
