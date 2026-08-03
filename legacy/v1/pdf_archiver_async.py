@@ -30,7 +30,10 @@ try:
 except ImportError:
     ProxyConnector = None
 
-from config import Config
+try:  # Support both `python -m legacy.v1.pdf_archiver_async` and direct legacy use.
+    from .config import Config
+except ImportError:  # pragma: no cover - direct script compatibility
+    from config import Config
 from utils import (
     _truncate, _normalize_pdf_url_value, _normalize_pdf_url_sql,
     _pdf_hash_bytes, _is_pdf_payload, _report_prefix,
@@ -50,7 +53,10 @@ from downloaders import (
 
 LOCAL_BUFFER_DIR = Config.LOCAL_BUFFER_DIR
 
-from db_manager import DBManager, get_db_connection, ensure_pdf_sync_status_schema
+try:
+    from .db_manager import DBManager, get_db_connection, ensure_pdf_sync_status_schema
+except ImportError:  # pragma: no cover - direct script compatibility
+    from db_manager import DBManager, get_db_connection, ensure_pdf_sync_status_schema
 
 def _row_payload(row):
     return {
@@ -97,7 +103,10 @@ async def check_and_restart_warp():
     except Exception:
         logging.warning(f"WARP proxy ({Config.WARP_PROXY}) seems down or unreachable. (Docker 'warp' container check needed)")
 
-from rclone_manager import RcloneManager
+try:
+    from .rclone_manager import RcloneManager
+except ImportError:  # pragma: no cover - direct script compatibility
+    from rclone_manager import RcloneManager
 
 class PDFArchiver(RcloneManager):
     def __init__(self):

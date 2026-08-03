@@ -10,10 +10,12 @@ tbl_sec_reports (source) → v3 (pdf_archiver_v3.py) → GDrive (archive/pdf)
 tbl_sec_reports_pdf_archive (meta + gdrive_file_id)    nginx proxy → https://ssh-oci.duckdns.org/pdf/{file_id}
 ```
 
-- **v1** (`pdf_archiver_async.py`): OneDrive 업로드. **deprecated**.
-- **v2** (`scripts/pdf_archiver_v2.py`): 이전 GDrive 구현. 현재 운영 진입점 아님.
+- **v1** (`legacy/v1/`): OneDrive 업로드. **운영 금지, Git 보관용**.
+- **v2** (`legacy/v2/`): 이전 GDrive 구현. **운영 금지, Git 보관용**.
 - **v3** (`scripts/pdf_archiver_v3.py`): `lib/cloud_store` 기반 GDrive 업로드. **현재 운영 중**.
 - arm2 사용자 크론: `*/3 * * * * bash /home/ubuntu/workspace/services/pdf-archiver/scripts/run_v3.sh`
+
+Docker는 운영 경로가 아니다. v1 Docker 정의는 `legacy/v1/docker/`에만 보관하며, 새 Docker 실행 경로를 만들지 않는다.
 
 ## Google Drive
 

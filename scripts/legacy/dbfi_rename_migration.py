@@ -30,7 +30,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-import pdf_archiver_async as archiver
+from legacy.v1 import pdf_archiver_async as archiver
 
 OLD_FIRM = "DB금융투자"
 NEW_FIRM = "DB증권"

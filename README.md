@@ -9,7 +9,7 @@ DB증권(DBfi) 레코드는 `pdf_url` 문자열만 직접 받아서 내려받는
 
 운영/분석/마이그레이션용 단발 스크립트는 `scripts/` 아래로 분리해 두었습니다.
 운영 실행 본체는 `scripts/pdf_archiver_v3.py`이며 arm2 사용자 crontab이 3분마다
-`scripts/run_v3.sh`를 호출합니다. `pdf_archiver_async.py`는 deprecated v1 구현입니다.
+`scripts/run_v3.sh`를 호출합니다. v1/v2 구현은 운영 경로에서 제거하고 `legacy/`에 보관합니다.
 
 2026-07-10 운영 DB 기준 source URL/키는 `tbl_sec_reports`의 `pdf_url`,
 `telegram_url`, `report_unique_key`입니다. archive 테이블은 `pdf_url`,
@@ -19,4 +19,4 @@ DB증권(DBfi) 레코드는 `pdf_url` 문자열만 직접 받아서 내려받는
 
 환경변수는 기본적으로 `~/secrets/pdf_archiver/.json`에서 읽습니다.
 필요하면 `WORKSPACE_SECRET_FILE`로 다른 JSON 경로를 지정할 수 있습니다.
-Docker Compose는 호스트의 `/home/ubuntu/secrets/pdf_archiver`를 `/secrets/pdf_archiver`로 마운트해 같은 파일을 읽습니다.
+Docker는 현재 운영하지 않습니다. PDF 처리 병목과 호스트 경로/터널 의존성 때문에 arm2 크론을 단일 운영 경로로 사용합니다.

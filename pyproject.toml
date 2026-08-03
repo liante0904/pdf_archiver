@@ -15,6 +15,7 @@ package = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 python_files = ["tests/test_*.py"]
+testpaths = ["tests"]
 
 [dependency-groups]
 dev = [

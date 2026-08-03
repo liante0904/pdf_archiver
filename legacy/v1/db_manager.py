@@ -1,6 +1,9 @@
 import asyncpg
 import logging
-from config import Config
+try:
+    from .config import Config
+except ImportError:  # pragma: no cover - direct script compatibility
+    from config import Config
 
 class DBManager:
     _conn = None

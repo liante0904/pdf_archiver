@@ -12,7 +12,7 @@ from _bootstrap import build_postgres_dsn
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-from pdf_archiver_async import PDFArchiver
+from legacy.v1.pdf_archiver_async import PDFArchiver
 
 async def archive_specific_ids(report_ids):
     logging.basicConfig(level=logging.INFO)

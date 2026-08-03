@@ -31,11 +31,11 @@ import aiohttp
 import asyncpg
 
 # ── bootstrap path ──────────────────────────────────────────
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from _bootstrap import build_postgres_dsn
+from scripts._bootstrap import build_postgres_dsn
 
 # ── Downloader imports (populate registry) ──────────────────
 from downloaders import (

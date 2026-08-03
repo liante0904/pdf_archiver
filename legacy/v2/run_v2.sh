@@ -1,6 +1,6 @@
 #!/bin/bash
 # v2 archiver wrapper: SSH 터널 → v2 실행 → 정리
-# crontab: */3 * * * * bash /home/ubuntu/workspace/services/pdf-archiver/scripts/run_v2.sh
+# Legacy only. Do not install in crontab; production uses scripts/run_v3.sh.
 
 set -e
 cd /home/ubuntu/workspace/services/pdf-archiver
@@ -21,7 +21,7 @@ fi
 # v2 실행 (터널 포트로)
 POSTGRES_HOST=localhost POSTGRES_PORT=5433 \
   PATH="/home/ubuntu/.local/bin:$PATH" \
-  /home/ubuntu/.local/bin/uv run --env-file .env python scripts/pdf_archiver_v2.py \
+  /home/ubuntu/.local/bin/uv run --env-file .env python legacy/v2/pdf_archiver_v2.py \
   >> "$LOGDIR/pdf_archiver_v2.log" 2>&1
 
 echo "[$(date)] exit=$?" >> "$LOGDIR/pdf_archiver_v2_exit.log"

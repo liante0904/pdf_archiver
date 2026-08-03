@@ -2,7 +2,10 @@ import os
 import shutil
 import sys
 import logging
-from db_tables import PDF_ARCHIVE_TABLE, SOURCE_REPORTS_TABLE
+try:
+    from .db_tables import PDF_ARCHIVE_TABLE, SOURCE_REPORTS_TABLE
+except ImportError:  # pragma: no cover - direct script compatibility
+    from db_tables import PDF_ARCHIVE_TABLE, SOURCE_REPORTS_TABLE
 from secret_env import load_workspace_secret_env_defaults
 
 def _load_secret_env_defaults():

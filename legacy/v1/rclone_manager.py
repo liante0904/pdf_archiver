@@ -5,7 +5,10 @@ import logging
 import asyncio
 import unicodedata
 from pathlib import Path
-from config import Config
+try:
+    from .config import Config
+except ImportError:  # pragma: no cover - direct script compatibility
+    from config import Config
 
 class RcloneManager:
     @staticmethod
