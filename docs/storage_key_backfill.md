@@ -16,11 +16,11 @@ POSTGRES_HOST=localhost POSTGRES_PORT=5433 \
 
 # 3. Small reviewed pilot; this changes only uniquely matched rows
 POSTGRES_HOST=localhost POSTGRES_PORT=5433 \
-  uv run --env-file .env python scripts/backfill_storage_keys.py --execute --limit 500
+  uv run --env-file .env python scripts/backfill_storage_keys.py --execute --max-updates 500
 ```
 
 Do not run `--refresh-manifest` on every cron cycle. Refresh the manifest
-manually or on a low-frequency schedule, then run small `--execute` batches
-using that reviewed snapshot. The script has its own lock and updates only rows
-whose `storage_key` is still empty, so it does not overlap v3's newly archived
-rows.
+manually or on a low-frequency schedule, then run
+`--execute --max-updates 500` batches using that reviewed snapshot. The script
+has its own lock and updates only rows whose `storage_key` is still empty, so it
+does not overlap v3's newly archived rows.

@@ -186,8 +186,15 @@ def write_plan(plan: list[dict], path: Path) -> None:
         writer.writerows(plan)
 
 
-async def apply_matches(conn: asyncpg.Connection, plan: list[dict], batch_size: int) -> tuple[int, int]:
+async def apply_matches(
+    conn: asyncpg.Connection,
+    plan: list[dict],
+    batch_size: int,
+    max_updates: int | None,
+) -> tuple[int, int]:
     matches = [row for row in plan if row["state"] == "matched"]
+    if max_updates is not None:
+        matches = matches[:max_updates]
     applied = skipped = 0
     for start in range(0, len(matches), batch_size):
         async with conn.transaction():
@@ -237,7 +244,7 @@ async def run(args: argparse.Namespace) -> int:
         if not args.execute:
             log("Dry-run only. Review the CSV, then run again with --execute using the same manifest.")
             return 0
-        applied, skipped = await apply_matches(conn, plan, args.batch_size)
+        applied, skipped = await apply_matches(conn, plan, args.batch_size, args.max_updates)
         log(f"Execute complete: applied={applied} skipped_after_recheck={skipped} untouched_missing={counts['missing']} untouched_ambiguous={counts['ambiguous']}")
         return 0
     finally:
@@ -253,6 +260,7 @@ def main() -> int:
     parser.add_argument("--execute", action="store_true", help="Apply only unique report_id-to-remote-path matches.")
     parser.add_argument("--limit", type=int, help="Restrict candidate rows; useful for a pilot.")
     parser.add_argument("--batch-size", type=int, default=250)
+    parser.add_argument("--max-updates", type=int, help="Apply at most this many uniquely matched rows; use for scheduled batches.")
     args = parser.parse_args()
     if args.execute and args.refresh_manifest:
         parser.error("Run --refresh-manifest as a dry-run first; execute only with a reviewed manifest.")
@@ -260,6 +268,8 @@ def main() -> int:
         parser.error("--limit must be positive")
     if args.batch_size <= 0:
         parser.error("--batch-size must be positive")
+    if args.max_updates is not None and args.max_updates <= 0:
+        parser.error("--max-updates must be positive")
 
     lock = open(LOCK_FILE, "w")
     try:
