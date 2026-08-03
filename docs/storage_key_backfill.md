@@ -25,10 +25,10 @@ manually or on a low-frequency schedule, then run
 has its own lock and updates only rows whose `storage_key` is still empty, so it
 does not overlap v3's newly archived rows.
 
-The arm2 production schedule uses a conservative hourly batch, offset from v3:
+The arm2 production schedule runs every five minutes:
 
 ```cron
-17 * * * * bash /home/ubuntu/workspace/services/pdf-archiver/scripts/run_storage_key_backfill.sh
+*/5 * * * * bash /home/ubuntu/workspace/services/pdf-archiver/scripts/run_storage_key_backfill.sh
 ```
 
 Each run updates at most 10 uniquely matched rows. It reuses the reviewed local
