@@ -1,22 +1,24 @@
-# pdf_archiver
+# PDF Archiver
 
-DB증권(DBfi) 레코드는 `pdf_url` 문자열만 직접 받아서 내려받는 방식이 아니라,
-`key -> descRsh JSON -> pv/auth -> pv/viewer -> streamdocs PDF GET` 순서를 같은
-`aiohttp` 세션 안에서 타야 합니다. `pdf_url`은 사용자가 볼 수 있는 URL로 저장되지만,
-쿠키 없는 새 프로세스나 `wget`으로 직접 호출하면 실패할 수 있습니다.
+증권사 리포트 PDF를 arm2에서 다운로드해 Google Drive에 저장하는 배치 서비스다.
 
-현재 v3 아카이버는 DBfi를 이 방식으로 처리하고, 일반 증권사는 기존 URL 후보 다운로드 경로를 유지합니다.
+시작 전에는 [현재 운영 상태](docs/PROJECT_STATE.md)를 읽는다. 이 문서가 현재
+운영 경로·DB 해석·크론·데이터 복구 상태의 단일 기준이다.
 
-운영/분석/마이그레이션용 단발 스크립트는 `scripts/` 아래로 분리해 두었습니다.
-운영 실행 본체는 `scripts/pdf_archiver_v3.py`이며 arm2 사용자 crontab이 3분마다
-`scripts/run_v3.sh`를 호출합니다. v1/v2 구현은 운영 경로에서 제거하고 `legacy/`에 보관합니다.
+## 운영 진입점
 
-2026-07-10 운영 DB 기준 source URL/키는 `tbl_sec_reports`의 `pdf_url`,
-`telegram_url`, `report_unique_key`입니다. archive 테이블은 `pdf_url`,
-`telegram_url`만 사용하며, `download_url`과 `download_status_yn`은 두 테이블에 없습니다.
+- 신규 다운로드/업로드: `scripts/run_v3.sh` → `scripts/pdf_archiver_v3.py`
+- 과거 경로 복구: `scripts/run_storage_key_backfill.sh` → `scripts/backfill_storage_keys.py`
+- PostgreSQL 백업: `scripts/pg_backup.sh`
 
-현재 안정화 방향과 수정 시 주의사항은 `docs/archiver_stability_notes.md`를 먼저 확인하세요.
+Docker는 운영하지 않는다. 호스트의 SSH 터널, WARP, rclone 설정을 사용하는 arm2
+크론이 실제 실행 경로다. v1/v2는 [legacy/](legacy/README.md)에 보관한다.
 
-환경변수는 기본적으로 `~/secrets/pdf_archiver/.json`에서 읽습니다.
-필요하면 `WORKSPACE_SECRET_FILE`로 다른 JSON 경로를 지정할 수 있습니다.
-Docker는 현재 운영하지 않습니다. PDF 처리 병목과 호스트 경로/터널 의존성 때문에 arm2 크론을 단일 운영 경로로 사용합니다.
+## 검증
+
+```bash
+uv run pytest -q
+uv run python -m py_compile scripts/pdf_archiver_v3.py scripts/backfill_storage_keys.py
+```
+
+`docs/archive/`는 이전 v1/v2 설계·마이그레이션 기록이다. 현재 운영 판단에 사용하지 않는다.
