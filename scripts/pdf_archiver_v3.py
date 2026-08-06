@@ -119,6 +119,10 @@ async def find_by_hash(conn: asyncpg.Connection, pdf_hash: str) -> Optional[dict
         FROM {ARCHIVE_TABLE}
         WHERE encode(pdf_hash, 'hex') = $1
           AND archive_status = 'ARCHIVED'
+          AND NULLIF(BTRIM(gdrive_file_id), '') IS NOT NULL
+          AND NULLIF(BTRIM(storage_key), '') IS NOT NULL
+          AND COALESCE(file_size, 0) > 0
+        ORDER BY updated_at DESC NULLS LAST, report_id ASC
         LIMIT 1
         """,
         pdf_hash,

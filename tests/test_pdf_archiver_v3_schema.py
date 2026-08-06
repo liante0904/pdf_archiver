@@ -31,6 +31,11 @@ class FakeConnection:
         self.args = args
         return "INSERT 0 1"
 
+    async def fetchrow(self, query, *args):
+        self.query = query
+        self.args = args
+        return None
+
 
 class FetchTargetsSchemaTests(unittest.IsolatedAsyncioTestCase):
     async def test_queries_use_only_current_source_url_columns(self):
@@ -70,6 +75,15 @@ class FetchTargetsSchemaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sync_status", conn.query)
         self.assertIn("gdrive_file_id", conn.query)
         self.assertEqual(len(conn.args), 15)
+
+    async def test_hash_dedup_requires_verified_remote_canonical(self):
+        conn = FakeConnection()
+        archiver = load_archiver()
+
+        self.assertIsNone(await archiver.find_by_hash(conn, "abc"))
+        self.assertIn("gdrive_file_id", conn.query)
+        self.assertIn("storage_key", conn.query)
+        self.assertIn("COALESCE(file_size, 0) > 0", conn.query)
 
 
 if __name__ == "__main__":
