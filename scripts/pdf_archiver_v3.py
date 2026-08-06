@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import sys
@@ -114,7 +115,7 @@ async def fetch_targets(conn: asyncpg.Connection, limit: int) -> list[asyncpg.Re
 async def find_by_hash(conn: asyncpg.Connection, pdf_hash: str) -> Optional[dict]:
     row = await conn.fetchrow(
         f"""
-        SELECT report_id, storage_key, file_size, page_count, pdf_hash
+        SELECT report_id, storage_key, gdrive_file_id, file_size, page_count, pdf_hash
         FROM {ARCHIVE_TABLE}
         WHERE encode(pdf_hash, 'hex') = $1
           AND archive_status = 'ARCHIVED'
@@ -129,7 +130,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
                          title: str, report_date: str, pdf_url: str,
                          storage_key: str, file_size: int, page_count: int,
                          pdf_hash: str, pdf_hash_bytes: bytes, success: bool,
-                         retry_delta: int = 0):
+                         retry_delta: int = 0, gdrive_file_id: str | None = None):
     status = 2 if success else 3
     archive_status = "ARCHIVED" if success else "INIT"
     file_name = Path(storage_key).name if storage_key else None
@@ -138,10 +139,10 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
         f"""
         INSERT INTO {ARCHIVE_TABLE} (
             report_id, firm_nm, title, report_date, pdf_url, pdf_hash,
-            storage_backend, storage_key, file_name, file_size, page_count,
+            storage_backend, storage_key, gdrive_file_id, file_name, file_size, page_count,
             archive_status, pdf_sync_status, sync_status,
             created_at, updated_at, retry_count
-        ) VALUES ($1,$2,$3,$4,$5,$6,'googledrive',$7,$8,$9,$10,$11,$12,$13,NOW(),NOW(),$14)
+        ) VALUES ($1,$2,$3,$4,$5,$6,'googledrive',$7,$15,$8,$9,$10,$11,$12,$13,NOW(),NOW(),$14)
         ON CONFLICT (report_id) DO UPDATE SET
             firm_nm = EXCLUDED.firm_nm,
             title = EXCLUDED.title,
@@ -150,6 +151,7 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
             pdf_hash = COALESCE(EXCLUDED.pdf_hash, {ARCHIVE_TABLE}.pdf_hash),
             storage_backend = 'googledrive',
             storage_key = COALESCE(EXCLUDED.storage_key, {ARCHIVE_TABLE}.storage_key),
+            gdrive_file_id = COALESCE(EXCLUDED.gdrive_file_id, {ARCHIVE_TABLE}.gdrive_file_id),
             file_name = COALESCE(EXCLUDED.file_name, {ARCHIVE_TABLE}.file_name),
             file_size = COALESCE(EXCLUDED.file_size, {ARCHIVE_TABLE}.file_size),
             page_count = COALESCE(EXCLUDED.page_count, {ARCHIVE_TABLE}.page_count),
@@ -161,8 +163,25 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
         """,
         report_id, firm_nm, title, report_date, pdf_url, pdf_hash_bytes,
         storage_key, file_name, file_size, page_count,
-        archive_status, status, status, retry_delta,
+        archive_status, status, status, retry_delta, gdrive_file_id,
     )
+
+
+async def fetch_gdrive_file_id(storage_key: str) -> str | None:
+    """Return the immutable Google Drive ID for an uploaded object."""
+    remote = f"{RCLONE_REMOTE.rstrip('/')}/{storage_key.lstrip('/')}"
+    cmd = [os.getenv("RCLONE_BIN", "rclone"), "--config", RCLONE_CONFIG, "lsjson", "--files-only", remote]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+    try:
+        items = json.loads(stdout)
+        return str(items[0]["ID"]) if items and items[0].get("ID") else None
+    except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+        return None
 
 
 # ── File path builder ───────────────────────────────────────
@@ -338,7 +357,8 @@ async def process_one(
             async with db_lock:
                 await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
                                      existing["storage_key"], existing["file_size"] or file_size,
-                                     existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True, retry_delta=0)
+                                     existing["page_count"] or 0, pdf_hash_hex, pdf_hash_bytes, True,
+                                     retry_delta=0, gdrive_file_id=existing.get("gdrive_file_id"))
             work_path.unlink(missing_ok=True)
             return True
 
@@ -350,10 +370,12 @@ async def process_one(
         try:
             async with rclone_sem:
                 await store.upload(str(local_target), storage_key)
+            gdrive_file_id = await fetch_gdrive_file_id(storage_key)
             async with db_lock:
                 await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
                                      storage_key, file_size, page_count=0,
-                                     pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=True, retry_delta=0)
+                                     pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=True,
+                                     retry_delta=0, gdrive_file_id=gdrive_file_id)
             local_target.unlink(missing_ok=True)
             log.info(f"[{report_id}] UPLOADED {firm} | {title[:30]}...")
             return True

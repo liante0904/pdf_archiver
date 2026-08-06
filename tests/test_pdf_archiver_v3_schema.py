@@ -68,7 +68,8 @@ class FetchTargetsSchemaTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("download_status_yn", conn.query)
         self.assertIn("pdf_sync_status", conn.query)
         self.assertIn("sync_status", conn.query)
-        self.assertEqual(len(conn.args), 14)
+        self.assertIn("gdrive_file_id", conn.query)
+        self.assertEqual(len(conn.args), 15)
 
 
 if __name__ == "__main__":
