@@ -60,6 +60,9 @@ LOCK_FILE = "/tmp/pdf_archiver_v3.lock"
 MAX_QUOTA_FAILURES = int(os.getenv("V3_MAX_QUOTA_FAILURES", "12"))
 MAX_RUNTIME_SECONDS = int(os.getenv("V3_MAX_RUNTIME", "1800"))
 QUOTA_BACKOFF_BASE = float(os.getenv("V3_QUOTA_BACKOFF_BASE", "5.0"))
+# ``rclone copyto`` and the follow-up ``lsjson`` are separate processes, so
+# rclone's per-process pacer cannot protect their combined Drive API rate.
+GDRIVE_REQUEST_COOLDOWN = float(os.getenv("V3_GDRIVE_REQUEST_COOLDOWN", "2.0"))
 
 SOURCE_TABLE = '"tbl_sec_reports"'
 ARCHIVE_TABLE = '"tbl_sec_reports_pdf_archive"'
@@ -374,7 +377,11 @@ async def process_one(
         try:
             async with rclone_sem:
                 await store.upload(str(local_target), storage_key)
-            gdrive_file_id = await fetch_gdrive_file_id(storage_key)
+                # Keep the verification lookup in the same single Drive lane.
+                # Otherwise six download workers can issue lsjson calls at once.
+                gdrive_file_id = await fetch_gdrive_file_id(storage_key)
+                if GDRIVE_REQUEST_COOLDOWN:
+                    await asyncio.sleep(GDRIVE_REQUEST_COOLDOWN)
             async with db_lock:
                 await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
                                      storage_key, file_size, page_count=0,
@@ -383,12 +390,12 @@ async def process_one(
             local_target.unlink(missing_ok=True)
             log.info(f"[{report_id}] UPLOADED {firm} | {title[:30]}...")
             return True
-        except QuotaExceededError:
+        except QuotaExceededError as exc:
             async with db_lock:
                 await upsert_archive(conn, report_id, firm, title, report_date_str, pdf_url,
                                      storage_key, file_size, page_count=0,
                                      pdf_hash=pdf_hash_hex, pdf_hash_bytes=pdf_hash_bytes, success=False, retry_delta=0)
-            log.warning(f"[{report_id}] QUOTA_EXCEEDED (retry not incremented) {firm} | {title[:30]}...")
+            log.warning(f"[{report_id}] QUOTA_EXCEEDED (retry not incremented) {firm} | {title[:30]}... ({exc})")
             return "quota"
         except Exception as e:
             async with db_lock:
