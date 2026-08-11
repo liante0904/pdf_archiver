@@ -62,7 +62,11 @@ MAX_RUNTIME_SECONDS = int(os.getenv("V3_MAX_RUNTIME", "1800"))
 QUOTA_BACKOFF_BASE = float(os.getenv("V3_QUOTA_BACKOFF_BASE", "5.0"))
 # ``rclone copyto`` and the follow-up ``lsjson`` are separate processes, so
 # rclone's per-process pacer cannot protect their combined Drive API rate.
-GDRIVE_REQUEST_COOLDOWN = float(os.getenv("V3_GDRIVE_REQUEST_COOLDOWN", "2.0"))
+# A historical month/broker path can require several Drive queries to create.
+# The consumer project is currently hitting its Queries-per-minute quota, so
+# keep complete upload+verification cycles to at most six per minute by default.
+GDRIVE_REQUEST_COOLDOWN = float(os.getenv("V3_GDRIVE_REQUEST_COOLDOWN", "10.0"))
+GDRIVE_PACER_MIN_SLEEP = os.getenv("V3_GDRIVE_PACER_MIN_SLEEP", "1s")
 
 SOURCE_TABLE = '"tbl_sec_reports"'
 ARCHIVE_TABLE = '"tbl_sec_reports_pdf_archive"'
@@ -177,7 +181,11 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
 async def fetch_gdrive_file_id(storage_key: str) -> str | None:
     """Return the immutable Google Drive ID for an uploaded object."""
     remote = f"{RCLONE_REMOTE.rstrip('/')}/{storage_key.lstrip('/')}"
-    cmd = [os.getenv("RCLONE_BIN", "rclone"), "--config", RCLONE_CONFIG, "lsjson", "--files-only", remote]
+    cmd = [
+        os.getenv("RCLONE_BIN", "rclone"), "--config", RCLONE_CONFIG,
+        "--drive-pacer-min-sleep", GDRIVE_PACER_MIN_SLEEP,
+        "--drive-pacer-burst", "1", "lsjson", "--files-only", remote,
+    ]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
@@ -416,7 +424,10 @@ async def run():
     db_lock = asyncio.Lock()
     rclone_sem = asyncio.Semaphore(int(os.getenv("V3_RCLONE_WORKERS", "1")))
 
-    async with CloudStore(RCLONE_REMOTE, config=RCLONE_CONFIG) as store:
+    async with CloudStore(
+        RCLONE_REMOTE, config=RCLONE_CONFIG,
+        pacer_sleep=GDRIVE_PACER_MIN_SLEEP, pacer_burst=1,
+    ) as store:
         try:
             LOCAL_BUFFER.mkdir(parents=True, exist_ok=True)
             sem = asyncio.Semaphore(WORKERS)

@@ -88,6 +88,8 @@ class FetchTargetsSchemaTests(unittest.IsolatedAsyncioTestCase):
     def test_drive_operations_are_serialized_with_a_cooldown(self):
         source = (SCRIPTS_PATH / "pdf_archiver_v3.py").read_text()
         self.assertIn("GDRIVE_REQUEST_COOLDOWN", source)
+        self.assertIn('"10.0"', source)
+        self.assertIn("GDRIVE_PACER_MIN_SLEEP", source)
         self.assertIn("gdrive_file_id = await fetch_gdrive_file_id(storage_key)", source)
 
 
