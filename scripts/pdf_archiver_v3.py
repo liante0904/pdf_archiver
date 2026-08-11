@@ -50,6 +50,11 @@ WORKERS = int(os.getenv("V3_WORKERS", os.getenv("V2_WORKERS", "6")))
 HTTP_TIMEOUT = int(os.getenv("V3_HTTP_TIMEOUT", os.getenv("V2_HTTP_TIMEOUT", "45")))
 RCLONE_REMOTE = os.getenv("V3_RCLONE_REMOTE", os.getenv("RCLONE_REMOTE", "gdrive:archive/pdf"))
 RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", os.path.expanduser("~/.config/rclone/rclone.conf"))
+RCLONE_BIN = os.getenv("RCLONE_BIN", "rclone")
+# Optional Drive folder root.  With this set, each rclone process starts at
+# the PDF root rather than resolving ``gdrive:archive/pdf`` on every upload.
+GDRIVE_ROOT_FOLDER_ID = os.getenv("V3_GDRIVE_ROOT_FOLDER_ID", "")
+GDRIVE_ROOT_REMOTE = os.getenv("V3_GDRIVE_ROOT_REMOTE", "gdrive:")
 LOCAL_BUFFER = Path(os.getenv("V3_BUFFER_DIR", os.getenv("V2_BUFFER_DIR", "/tmp/pdf_archiver_v3")))
 DB_RETRY_LIMIT = int(os.getenv("V3_RETRY_LIMIT", os.getenv("V2_RETRY_LIMIT", "8")))
 
@@ -180,12 +185,15 @@ async def upsert_archive(conn: asyncpg.Connection, report_id: int, firm_nm: str,
 
 async def fetch_gdrive_file_id(storage_key: str) -> str | None:
     """Return the immutable Google Drive ID for an uploaded object."""
-    remote = f"{RCLONE_REMOTE.rstrip('/')}/{storage_key.lstrip('/')}"
+    remote = drive_remote_path(storage_key)
     cmd = [
-        os.getenv("RCLONE_BIN", "rclone"), "--config", RCLONE_CONFIG,
+        RCLONE_BIN, "--config", RCLONE_CONFIG,
         "--drive-pacer-min-sleep", GDRIVE_PACER_MIN_SLEEP,
-        "--drive-pacer-burst", "1", "lsjson", "--files-only", remote,
+        "--drive-pacer-burst", "1",
     ]
+    if GDRIVE_ROOT_FOLDER_ID:
+        cmd.extend(["--drive-root-folder-id", GDRIVE_ROOT_FOLDER_ID])
+    cmd.extend(["lsjson", "--files-only", remote])
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
@@ -197,6 +205,36 @@ async def fetch_gdrive_file_id(storage_key: str) -> str | None:
         return str(items[0]["ID"]) if items and items[0].get("ID") else None
     except (IndexError, KeyError, TypeError, json.JSONDecodeError):
         return None
+
+
+def drive_remote_path(storage_key: str) -> str:
+    if GDRIVE_ROOT_FOLDER_ID:
+        return f"{GDRIVE_ROOT_REMOTE.rstrip(':')}:{storage_key.lstrip('/')}"
+    return f"{RCLONE_REMOTE.rstrip('/')}/{storage_key.lstrip('/')}"
+
+
+async def upload_to_drive(store: CloudStore, local_path: Path, storage_key: str) -> None:
+    """Upload through the pinned Drive root when configured for v3."""
+    if not GDRIVE_ROOT_FOLDER_ID:
+        await store.upload(str(local_path), storage_key)
+        return
+    cmd = [
+        RCLONE_BIN, "--config", RCLONE_CONFIG,
+        "--drive-root-folder-id", GDRIVE_ROOT_FOLDER_ID,
+        "copyto", str(local_path), drive_remote_path(storage_key),
+        "--retries", "3", "--low-level-retries", "5",
+        "--drive-pacer-min-sleep", GDRIVE_PACER_MIN_SLEEP,
+        "--drive-pacer-burst", "1",
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode:
+        detail = stderr.decode(errors="replace")[:500]
+        if any(token in detail for token in ("Quota exceeded", "rateLimitExceeded", "userRateLimitExceeded", "Error 403")):
+            raise QuotaExceededError(detail)
+        raise RuntimeError(f"rclone upload failed: {detail}")
 
 
 # ── File path builder ───────────────────────────────────────
@@ -384,7 +422,7 @@ async def process_one(
 
         try:
             async with rclone_sem:
-                await store.upload(str(local_target), storage_key)
+                await upload_to_drive(store, local_target, storage_key)
                 # Keep the verification lookup in the same single Drive lane.
                 # Otherwise six download workers can issue lsjson calls at once.
                 gdrive_file_id = await fetch_gdrive_file_id(storage_key)

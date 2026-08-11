@@ -25,6 +25,8 @@ export PYTHONPATH="/home/ubuntu/workspace/lib:$PYTHONPATH"
 
 # v3 실행
 POSTGRES_HOST=localhost POSTGRES_PORT=5433 \
+  V3_GDRIVE_ROOT_FOLDER_ID="1E73YN9Uubb80ahJCfqu61qBSsvzBd0qn" \
+  V3_GDRIVE_ROOT_REMOTE="gdrive:" \
   PATH="/home/ubuntu/.local/bin:$PATH" \
   /home/ubuntu/.local/bin/uv run --env-file .env python scripts/pdf_archiver_v3.py \
   >> "$LOGDIR/pdf_archiver_v3.log" 2>&1

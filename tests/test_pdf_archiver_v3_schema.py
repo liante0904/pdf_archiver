@@ -90,6 +90,8 @@ class FetchTargetsSchemaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("GDRIVE_REQUEST_COOLDOWN", source)
         self.assertIn('"10.0"', source)
         self.assertIn("GDRIVE_PACER_MIN_SLEEP", source)
+        self.assertIn("GDRIVE_ROOT_FOLDER_ID", source)
+        self.assertIn("--drive-root-folder-id", source)
         self.assertIn("gdrive_file_id = await fetch_gdrive_file_id(storage_key)", source)
 
 
