@@ -8,11 +8,17 @@ The service runs on arm2; OCI hosts PostgreSQL. Docker is not an operational pat
 
 | Job | Actual entry point | Schedule | Purpose |
 |---|---|---|---|
-| New PDFs | `scripts/run_v3.sh` | every 3 minutes | download, validate `%PDF-`, upload to `gdrive:archive/pdf` |
+| New PDFs | `scripts/run_v3.sh` | every 10 minutes | download, validate `%PDF-`, upload to the pinned Google Drive PDF root |
 | Historical key repair | `scripts/run_storage_key_backfill.sh` | every 5 minutes | update up to 500 DB rows from a reviewed GDrive manifest |
-| PostgreSQL backup | `scripts/pg_backup.sh` | daily 03:17 KST | dump and upload to `gdrive:archive/backups/db` |
+| PostgreSQL backup | `../postgresql-backup/scripts/pg_backup.sh` | daily 03:17 KST | dump and upload to `gdrive:archive/backups/db` |
 
 All three jobs create the OCI DB tunnel to `localhost:5433` when needed. Current crontab is the source of truth.
+
+The v3 run can process a batch for longer than 30 minutes because downloads are
+serialized around Drive upload and verification. The cron interval is therefore
+10 minutes; the wrapper lock prevents overlap. The historical GDrive ID verifier
+is not scheduled for automatic requeue until its manifest is refreshed and its
+remote root is reconciled.
 
 ## Data contract
 

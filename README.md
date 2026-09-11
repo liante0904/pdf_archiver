@@ -9,7 +9,7 @@
 
 - 신규 다운로드/업로드: `scripts/run_v3.sh` → `scripts/pdf_archiver_v3.py`
 - 과거 경로 복구: `scripts/run_storage_key_backfill.sh` → `scripts/backfill_storage_keys.py`
-- PostgreSQL 백업: `scripts/pg_backup.sh`
+- PostgreSQL 백업: `../postgresql-backup/scripts/pg_backup.sh`
 
 Docker는 운영하지 않는다. 호스트의 SSH 터널, WARP, rclone 설정을 사용하는 arm2
 크론이 실제 실행 경로다. v1/v2는 [legacy/](legacy/README.md)에 보관한다.

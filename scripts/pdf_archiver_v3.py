@@ -72,6 +72,7 @@ QUOTA_BACKOFF_BASE = float(os.getenv("V3_QUOTA_BACKOFF_BASE", "5.0"))
 # keep complete upload+verification cycles to at most six per minute by default.
 GDRIVE_REQUEST_COOLDOWN = float(os.getenv("V3_GDRIVE_REQUEST_COOLDOWN", "10.0"))
 GDRIVE_PACER_MIN_SLEEP = os.getenv("V3_GDRIVE_PACER_MIN_SLEEP", "1s")
+RCLONE_TIMEOUT_SECONDS = int(os.getenv("V3_RCLONE_TIMEOUT", "180"))
 
 SOURCE_TABLE = '"tbl_sec_reports"'
 ARCHIVE_TABLE = '"tbl_sec_reports_pdf_archive"'
@@ -197,7 +198,15 @@ async def fetch_gdrive_file_id(storage_key: str) -> str | None:
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    try:
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=min(RCLONE_TIMEOUT_SECONDS, 60)
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        log.warning("GDrive ID lookup timed out after %ss: %s", min(RCLONE_TIMEOUT_SECONDS, 60), storage_key[:160])
+        return None
     if proc.returncode != 0:
         return None
     try:
@@ -229,7 +238,14 @@ async def upload_to_drive(store: CloudStore, local_path: Path, storage_key: str)
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr = await proc.communicate()
+    try:
+        _, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=RCLONE_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError(f"rclone upload timed out after {RCLONE_TIMEOUT_SECONDS}s")
     if proc.returncode:
         detail = stderr.decode(errors="replace")[:500]
         if any(token in detail for token in ("Quota exceeded", "rateLimitExceeded", "userRateLimitExceeded", "Error 403")):
