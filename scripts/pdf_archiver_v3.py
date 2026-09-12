@@ -48,13 +48,13 @@ log = logging.getLogger("pdf_archiver_v3")
 BATCH_SIZE = int(os.getenv("V3_BATCH_SIZE", os.getenv("V2_BATCH_SIZE", "20")))
 WORKERS = int(os.getenv("V3_WORKERS", os.getenv("V2_WORKERS", "6")))
 HTTP_TIMEOUT = int(os.getenv("V3_HTTP_TIMEOUT", os.getenv("V2_HTTP_TIMEOUT", "45")))
-RCLONE_REMOTE = os.getenv("V3_RCLONE_REMOTE", os.getenv("RCLONE_REMOTE", "gdrive:archive/pdf"))
+RCLONE_REMOTE = os.getenv("V3_RCLONE_REMOTE", os.getenv("RCLONE_REMOTE", "gdrive-private:archive/pdf"))
 RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", os.path.expanduser("~/.config/rclone/rclone.conf"))
 RCLONE_BIN = os.getenv("RCLONE_BIN", "rclone")
 # Optional Drive folder root.  With this set, each rclone process starts at
-# the PDF root rather than resolving ``gdrive:archive/pdf`` on every upload.
+# the PDF root rather than resolving ``gdrive-private:archive/pdf`` on every upload.
 GDRIVE_ROOT_FOLDER_ID = os.getenv("V3_GDRIVE_ROOT_FOLDER_ID", "")
-GDRIVE_ROOT_REMOTE = os.getenv("V3_GDRIVE_ROOT_REMOTE", "gdrive:")
+GDRIVE_ROOT_REMOTE = os.getenv("V3_GDRIVE_ROOT_REMOTE", "gdrive-private:")
 LOCAL_BUFFER = Path(os.getenv("V3_BUFFER_DIR", os.getenv("V2_BUFFER_DIR", "/tmp/pdf_archiver_v3")))
 DB_RETRY_LIMIT = int(os.getenv("V3_RETRY_LIMIT", os.getenv("V2_RETRY_LIMIT", "8")))
 
