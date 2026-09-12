@@ -478,6 +478,14 @@ async def run():
     db_lock = asyncio.Lock()
     rclone_sem = asyncio.Semaphore(int(os.getenv("V3_RCLONE_WORKERS", "1")))
 
+    log.info(
+        "Archive remote=%s root_remote=%s root_folder_id=%s config=%s",
+        RCLONE_REMOTE,
+        GDRIVE_ROOT_REMOTE,
+        "set" if GDRIVE_ROOT_FOLDER_ID else "unset",
+        RCLONE_CONFIG,
+    )
+
     async with CloudStore(
         RCLONE_REMOTE, config=RCLONE_CONFIG,
         pacer_sleep=GDRIVE_PACER_MIN_SLEEP, pacer_burst=1,
